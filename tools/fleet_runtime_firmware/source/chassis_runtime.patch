@@ -1,0 +1,2047 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index bc839822..a04f4776 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,6 +1,7 @@
+ cmake_minimum_required(VERSION 3.16)
+ 
+ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
++set(PROJECT_VER "2026.11.16-runtime1")
+ project(leap_ros_mcu_driver)
+ 
+ if(TARGET merge-bin)
+diff --git a/README.md b/README.md
+index 06846719..94234243 100644
+--- a/README.md
++++ b/README.md
+@@ -1,9 +1,18 @@
+ # leap_ros_mcu_driver
+ 
+-软件版本：`v2.2`
++软件版本：`v2.2.1-motion-safety`
+ 
+ `leap_ros_mcu_driver` 是 Leap_ROS 底盘的 ESP32-S3 下位机驱动固件，用于电机控制、里程计、IMU、雷达、超声波、电池状态、状态灯和外设数据采集。固件支持 micro-ROS 与 MAVLink 通信模式，并提供 Wi-Fi 配网页用于运行参数配置。
+ 
++## v2.2.1 运动通信修复
++
++- micro-ROS 速度指令增加 500 ms 车端接收租约，由独立 20 ms 控制任务检查；租约过期清除缓存速度并制动，手柄释放后不会恢复过期导航速度。
++- 拒绝非有限值与无法表示的速度输入；修正 HTTP 目标角速度遥测，新增固件版本与只读 `cmd_vel_watchdog` 状态。
++- 编码器零输入时，低于 0.001 rpm 的滤波尾数归零，消除 ROS 里程计中约 `1e-48 m/s` 的单精度非规格化残值。
++- 保持标准 Twist 与原有 sensor data best-effort QoS，发送端应持续以高于 2 Hz 的频率刷新速度，建议 20 Hz。DDS ACK 不代表车端接收或电机执行。
++
++主机离线回归：`cmake -S tests -B /tmp/leap-firmware-tests && cmake --build /tmp/leap-firmware-tests && ctest --test-dir /tmp/leap-firmware-tests --output-on-failure`。此修改尚需离线固件构建与上板验证；不会自动升级任何设备。
++
+ ## v2.2 功能
+ 
+ - 支持自动识别 LD STL26 和欢创 Camsense 雷达，断流后自动重新探测。
+@@ -88,3 +97,23 @@ g++ -std=c++17 -Wall -Wextra -Werror -I main/config -I main/control \
+ ## 协议说明
+ 
+ MAVLink 与 micro-ROS 的消息、话题和参数说明见 [doc/protocols.md](doc/protocols.md)。
++
++## 运行时实验配置（2026.11.16-runtime1）
++
++访问 `http://底盘IP/tuning` 可立即调整遥测频率与 XYZ 陀螺比例并保存 NVS；
++Wi-Fi 名称和密码也可通过现有网页或 JSON 接口修改（保存后重启生效）。
++底盘所有 Wi-Fi 初始化路径明确关闭省电，状态 API 返回实际模式与固件版本。
++参数范围、HTTP 示例、重启语义及完整遥测范围见 [协议说明](doc/protocols.md)。
++启动遇到需要恢复的 NVS 错误时保留数据并停止启动控制任务，不再自动整片擦除 NVS。
++
++离线验证（不连接小车，HTTP 用同版 ESP-IDF 的 cJSON）：
++
++```sh
++cmake -S tests -B /tmp/leap-runtime-tests \
++  -DCJSON_SOURCE_DIR="$IDF_PATH/components/json/cJSON"
++cmake --build /tmp/leap-runtime-tests -j2
++ctest --test-dir /tmp/leap-runtime-tests --output-on-failure
++```
++
++覆盖运动安全、时间同步、NVS 失败与重启加载、遥测调度、真实 IMU 驱动比例/积分、
++实际 HTTP 处理器解析与参数拒绝。固件的完整 ESP-IDF 构建及实车验证应另外记录。
+diff --git a/components/lsm6ds3_driver/lsm6ds3_driver.cpp b/components/lsm6ds3_driver/lsm6ds3_driver.cpp
+index 1dae6990..39adc3b5 100644
+--- a/components/lsm6ds3_driver/lsm6ds3_driver.cpp
++++ b/components/lsm6ds3_driver/lsm6ds3_driver.cpp
+@@ -102,7 +102,7 @@ bool Lsm6ds3Imu::Init() {
+   return true;
+ }
+ 
+-esp_err_t Lsm6ds3Imu::Update() {
++esp_err_t Lsm6ds3Imu::Update(float gyro_scale_x, float gyro_scale_y, float gyro_scale_z) {
+   uint8_t buffer[12];
+   if (ReadRegisters(kRegOutxLG, buffer, 12) != ESP_OK) {
+     return ESP_FAIL;
+@@ -117,9 +117,9 @@ esp_err_t Lsm6ds3Imu::Update() {
+   int16_t az = (buffer[11] << 8) | buffer[10];
+ 
+   // 【重要修改】：转换为物理单位 (±250dps -> 8.75mdps/LSB) 并减去校准零偏
+-  gyro_x_ = (gx * 8.75f / 1000.0f) - gyro_bias_x_;  
+-  gyro_y_ = (gy * 8.75f / 1000.0f) - gyro_bias_y_;
+-  gyro_z_ = (gz * 8.75f / 1000.0f) - gyro_bias_z_;
++  gyro_x_ = ((gx * 8.75f / 1000.0f) - gyro_bias_x_) * gyro_scale_x;
++  gyro_y_ = ((gy * 8.75f / 1000.0f) - gyro_bias_y_) * gyro_scale_y;
++  gyro_z_ = ((gz * 8.75f / 1000.0f) - gyro_bias_z_) * gyro_scale_z;
+ 
+   // 【重要修改】：引入死区，如果角速度极小 (<0.2 dps)，则视为未旋转，防止底噪被积分
+   constexpr float kGyroDeadzone = 0.2f; 
+diff --git a/components/lsm6ds3_driver/lsm6ds3_driver.h b/components/lsm6ds3_driver/lsm6ds3_driver.h
+index 1f0e50a2..9793c5ed 100644
+--- a/components/lsm6ds3_driver/lsm6ds3_driver.h
++++ b/components/lsm6ds3_driver/lsm6ds3_driver.h
+@@ -15,7 +15,7 @@ class Lsm6ds3Imu {
+   bool Init();
+ 
+   // 读取传感器数据并执行互补滤波更新姿态 (修改点：内部增加了零偏补偿和死区)
+-  esp_err_t Update();
++  esp_err_t Update(float gyro_scale_x = 1.0f, float gyro_scale_y = 1.0f, float gyro_scale_z = 1.0f);
+   
+   // 一次性获取四元数 (w, x, y, z)
+   void GetQuaternion(float &w, float &x, float &y, float &z) const {
+diff --git a/doc/protocols.md b/doc/protocols.md
+index 6bdb62ec..cc554120 100644
+--- a/doc/protocols.md
++++ b/doc/protocols.md
+@@ -1,6 +1,6 @@
+ # leap_ros_mcu_driver MAVLink 与 micro-ROS 协议说明
+ 
+-软件版本：`v2.2`
++软件版本：`v2.2.1-motion-safety`
+ 
+ 本文档说明 `leap_ros_mcu_driver` 固件提供的网络与串口通信协议。
+ 
+@@ -49,7 +49,36 @@
+ | `/cmd_vel` | `geometry_msgs/msg/Twist` | sensor data | `linear.x/y` 由 m/s 转为目标 `vx/vy`，单位 mm/s；`angular.z` 转为目标 `wz`，单位 rad/s |
+ | `/host_info` | `std_msgs/msg/String` | sensor data | 目标主机信息：`hostname=<name> ip=<ipv4>` 或 `hostname=<name> hostip=<ipv4>` |
+ 
+-收到 `/cmd_vel` 后会向 `q_motion_cmd` 写入速度指令，将控制来源标记为 micro-ROS，并清除 `g_emergency_stop`。
++有效 `/cmd_vel` 由 m/s 数值转换为内部 mm/s，写入运动指令队列，来源标记为 micro-ROS，并清除 emergency stop。非有限值或无法用内部 float 表示的速度被拒绝，不刷新租约。ROS 消息字段仍是标准 float64，没有改变消息定义或序列化 ABI。
++
++### 速度租约与状态检查
++
++micro-ROS 速度模式使用 500 ms 车端接收租约，由独立 20 ms 电机控制任务检查。发送端应持续刷新指令，建议 20 Hz；停止时仍应重复发送零速。最后一条有效速度过期后，控制任务清除有效速度及缓存速度并制动。手柄接管期间也继续计算租约，释放手柄只允许恢复尚未过期的 micro-ROS 指令。该租约不改变 MAVLink、位置控制或手柄自身的控制协议。
++
++`/cmd_vel` 沿用 sensor data QoS（best effort）。电脑端 DDS 的可靠发布或 ACK 不能证明 XRCE 链路投递、车端回调执行或电机停车。标准 Twist 没有发送时间戳/序号；租约从车端收到有效消息开始，不能识别已在网络中延迟的旧指令。新增序号仅为车端本地计数，不是发送端序号或停车执行 ACK。
++
++只读 `GET /api/status` 增加：
++
++```json
++{
++  "firmware": {"version": "2.2.1-motion-safety", "motion_safety_revision": 1},
++  "cmd_vel_watchdog": {
++    "enabled": true,
++    "timeout_ms": 500,
++    "has_command": false,
++    "last_cmd_age_ms": null,
++    "timed_out": false,
++    "received_sequence": 0,
++    "applied_sequence": 0
++  }
++}
++```
++
++`has_command` 表示控制任务已观察过有效 micro-ROS 速度；`last_cmd_age_ms` 是距该消息车端接收时刻的毫秒数，未收到时为 null。`timed_out` 表示最后一条 micro-ROS 速度租约已过期，即使车辆当前由手柄控制也可能为 true。`received_sequence` 是最近被运动队列交给控制任务的有效接收计数（队列可覆盖中间消息）；`applied_sequence` 是最近传给速度控制器的计数。两者均为 uint32，可回绕，不证明物理停车。安装旧固件时这些对象缺失，必须显示“未报告”。
++
++HTTP `motion.vx/vy/vel_left/vel_right` 为编码器滤波速度（mm/s），`wz` 为 rad/s；ROS `/odom` 线速度为 m/s。这次同时修复 `target_vy/target_wz` 未拷贝的遥测错误。编码器零输入且滤波尾数低于 0.001 rpm 时归零；约 `1e-48 m/s` 的旧值可由 float IIR 非规格化残值精确产生，并非足以证明 float64 序列化错误。
++
++已知重连边界：现有通信循环主要在 executor 返回错误时重建会话。Agent 重启后若等待持续超时且没有明确 executor 错误，旧会话可能不及时重建；此版本只增加独立速度租约，不把 Agent 可 ping 视为会话有效，也不增加未经验证的周期强制重连。
+ 
+ ### I²C 手柄控制
+ 
+@@ -60,7 +89,7 @@
+ | 左摇杆 Y | 前后线速度 `linear.x` | `300 mm/s`（等价于 `0.3 m/s`） |
+ | 右摇杆 X | 转向角速度 `angular.z` | `2.5 rad/s` |
+ 
+-摇杆死区为 12（原始范围 `-127..127`）。摇杆离开死区时手柄临时接管底盘；回到死区、断连或数据帧无效时，仅释放手动接管，不发送零速 `/cmd_vel`，随后继续执行最近一次导航指令。
++摇杆死区为 12（原始范围 `-127..127`）。摇杆离开死区时手柄临时接管底盘；回到死区、断连或数据帧无效时，仅释放手动接管，不发送零速 `/cmd_vel`，随后仅继续执行仍在有效租约内的 micro-ROS 导航速度；已过期时保持零速。其它来源沿用原协议。
+ 
+ ### 时间戳同步
+ 
+@@ -271,3 +300,77 @@ MAVLink 电池字段：
+ ## BOOT 键回到配网模式
+ 
+ 运行时长按 BOOT 键约 3 秒会清除已保存的 Wi-Fi STA 配置，状态灯进入快闪。松开 BOOT 键后设备会重启，并进入 Wi-Fi 配网模式。
++
++## 2026.11.16-runtime1：运行时实验参数
++
++网页 `http://底盘IP/tuning` 可修改以下参数；首页提供“实验参数”入口。
++它们也支持 `GET /api/tuning`、`POST /api/tuning`（JSON 部分更新），
++保存成功后立即生效并持久化到 NVS `experiment_cfg/tuning_v1`。
++重启会加载原值；缺少记录采用默认值；损坏记录报告错误并保留，不擦除 NVS。
++
++| JSON 参数 | 默认 | 允许范围 | 作用 |
++|---|---:|---:|---|
++| `telemetry_hz` | 50 | 整数 1–50 Hz | micro-ROS `odom`、`imu`；MAVLink ATTITUDE、ATTITUDE_QUATERNION、SCALED_IMU、ODOMETRY |
++| `slow_telemetry_hz` | 10 | 整数 1–10 Hz | micro-ROS `scan`、`battery_state`、`ultrasonic`；MAVLink 距离、轮速、忙状态及新雷达扫描 |
++| `gyro_scale_x` | 1.0 | 0.5–2.0 | X 陀螺角速度比例 |
++| `gyro_scale_y` | 1.0 | 0.5–2.0 | Y 陀螺角速度比例 |
++| `gyro_scale_z` | 1.0 | 0.5–2.0 | Z 陀螺角速度比例 |
++
++```sh
++curl http://底盘IP/api/tuning
++curl -X POST http://底盘IP/api/tuning -H 'Content-Type: application/json' \
++  --data '{"telemetry_hz":20,"slow_telemetry_hz":5,"gyro_scale_z":1.035}'
++```
++
++成功返回当前配置、`saved:true`、`restart:false`；不存在或重复字段、非法类型、
++非有限数、越界值返回 400，写入失败返回 500 且当前生效参数不变。
++GET 返回的 `schema_version` 和 `firmware_version` 是只读字段，不应原样提交。
++多个客户端应先读取再按需提交字段；同一 HTTP 服务顺序处理更新。
++
++遥测调度仍在现有 20 ms 服务周期内执行，各周期可能有一个调度步长的抖动；
++频率表示希望达到的发布速率，网络拥塞、主机时钟同步失败、传感器产出不足
++会降低有效数据率。ROS 雷达发送队列中的最近一圈数据，可能重复同一圈；
++MAVLink 仅发送新扫描，`slow_telemetry_hz` 是其发送上限。不能由此改变雷达转速。
++1 Hz MAVLink 心跳、系统状态/电量、Wi-Fi 配置信息和 ROS Wi-Fi 配置广播
++保持独立，不随上述参数改变。运动控制、指令接收和看门狗，以及 IMU 采样
++的 20 ms 周期也保持不变。
++
++陀螺比例在原来的原始计数→度/秒转换并减去开机零偏后应用，
++再进入原来的 0.2 dps 死区和姿态积分；不改变轴方向和 ROS 的 rad/s 单位。
++修改比例影响之后的角速度和姿态更新，不清零已经累计的 yaw。
++开机静止零偏校准仍每次进行，比例系数单独保存在 NVS。
++
++### Wi-Fi 配置与省电
++
++原有网页和表单 `POST /api/provision` 保持兼容。新增 JSON 接口：
++
++```sh
++curl http://底盘IP/api/wifi
++curl -X POST http://底盘IP/api/wifi -H 'Content-Type: application/json' \
++  --data '{"ssid":"实验网络","password":"替换为实际密码"}'
++```
++
++`ssid` 是要连接的路由器名称，1–32 UTF-8 字节；`password` 要同时提供，
++开放网络为空字符串，其他网络为 8–63 字节。GET 仅返回 SSID、是否设置密码
++和实际省电模式，不返回密码。POST 保存到现有 `wifi_cfg`，成功返回
++`{"saved":true,"restart":true,"delay_ms":1200}`，随后重启并连接新网络。
++因此无需重新刷固件，但 Wi-Fi 配置修改会中断当前会话，应在小车停止后操作。
++`Maturo_<MAC>` 是固定设备身份，不是此接口要修改的路由器 SSID。
++
++STA、APSTA 和 ESP-NOW 初始化均明确调用 `esp_wifi_set_ps(WIFI_PS_NONE)`。
++`GET /api/status` 的 `wifi.power_save` 与 `/api/wifi` 的 `power_save`
++报告驱动实际值，0 表示关闭省电；读取失败为 null，不假定成功。
++
++### 固件身份
++
++`GET /api/status` 保留原有设备名、camera 信息及 `firmware.version`，并返回：
++
++```json
++{"firmware":{"version":"2026.11.16-runtime1","motion_safety_revision":1,
++ "idf_version":"v5.5.3","project_name":"leap_ros_mcu_driver",
++ "build":"编译日期 编译时间","app_sha256":"64位十六进制"}}
++```
++
++`app_sha256` 来自 ESP-IDF 应用描述中的 ELF SHA256，**不是应用 bin 文件的 SHA256**。
++版本也写入启动日志和 MAVLink COMPONENT_INFORMATION_BASIC 的 software_version。
++会话日志采集端应同时记录设备身份、固件版本和观测时间，读取失败应明确记为未知。
+diff --git a/main/CMakeLists.txt b/main/CMakeLists.txt
+index 6cac586f..74641e67 100644
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -2,6 +2,7 @@ set(APP_SRCS
+     "app_main.cpp"
+     "app_runtime.cpp"
+     "config/pid_config.cpp"
++    "config/runtime_tuning_store.cpp"
+     "core/system_globals.cpp"
+     "platform/board.cpp"
+     "control/differential_kinematics.cpp"
+@@ -18,6 +19,7 @@ set(APP_SRCS
+     "tasks/network/mavlink/mavlink_uart_task.cpp"
+     "tasks/network/provision/wifi_provision_task.cpp"
+     "tasks/network/provision/provision_portal.cpp"
++    "tasks/network/provision/runtime_tuning_http.cpp"
+     "tasks/network/microros/microros_state.cpp"
+     "tasks/network/microros/microros_transport.cpp"
+     "tasks/network/microros/microros_subscribers.cpp"
+@@ -46,6 +48,9 @@ idf_component_register(
+         "../components/i2c_bus_lock"
+         "../components/mavlink_lib"
+     REQUIRES
++        json
++        esp_app_format
++        esp_timer
+         esp_http_server
+         esp_wifi
+         esp_netif
+diff --git a/main/app_runtime.cpp b/main/app_runtime.cpp
+index 8f97157f..0a134d48 100644
+--- a/main/app_runtime.cpp
++++ b/main/app_runtime.cpp
+@@ -14,6 +14,8 @@
+ #include "freertos/task.h"
+ #include "i2c_bus_lock.h"
+ #include "pid_config.h"
++#include "runtime_tuning_store.h"
++#include "firmware_version.h"
+ #include "msg/gamepad_msg.h"
+ #include "msg/imu_msg.h"
+ #include "msg/battery_msg.h"
+@@ -174,11 +176,16 @@ void app_runtime_startup(void) {
+ 
+     esp_err_t err = nvs_flash_init();
+     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+-        ESP_ERROR_CHECK(nvs_flash_erase());
+-        err = nvs_flash_init();
++        ESP_LOGE(TAG, "NVS needs recovery (%s); preserving device settings and leaving control tasks stopped", esp_err_to_name(err));
++        return;
+     }
+     ESP_ERROR_CHECK(err);
+ 
++    ESP_LOGI(TAG, "Firmware %s", leap_config::firmware::kVersion);
++    err = runtime_tuning_init();
++    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
++        ESP_LOGW(TAG, "Tuning load failed (%s), using defaults without erasing NVS", esp_err_to_name(err));
++    }
+     init_device_name();
+     init_runtime_config();
+     init_pid_config();
+diff --git a/main/config/motion_config.h b/main/config/motion_config.h
+index a3acee65..c9e4e62b 100644
+--- a/main/config/motion_config.h
++++ b/main/config/motion_config.h
+@@ -25,6 +25,10 @@ static constexpr float kDefaultYawKd = 0.5f;
+ static constexpr float kMaxPwm = 255.0f;
+ static constexpr float kMotorPwmDeadband = 150.0f;
+ static constexpr float kVelocityFilterAlpha = 0.35f;
++// Only zero-input filter tails below encoder resolution are rounded to zero.
++static constexpr float kVelocityZeroThresholdRpm = 0.001f;
++// Lease is checked by the independent 20 ms motor-control task.
++static constexpr uint32_t kMicroRosCommandTimeoutMs = 500;
+ static constexpr float kMaxPositionVelocityMmS = 250.0f;
+ static constexpr float kMaxPositionYawRadS = 3.0f;
+ static constexpr int kRelativeTurnSettleMaxCycles = 5;
+diff --git a/main/control/motion_controller.cpp b/main/control/motion_controller.cpp
+index 58040c9f..a4213db6 100644
+--- a/main/control/motion_controller.cpp
++++ b/main/control/motion_controller.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "motion_controller.h"
+ #include "motion_config.h"
++#include "motion_safety.h"
+ #include "esp_log.h"
+ #include <algorithm>
+ #include <cmath>
+@@ -137,7 +138,7 @@ void MotionController::Update(float dt, float current_imu_yaw_rad) {
+     float pps = (current_count - last_count_[i]) / dt;
+     last_count_[i] = current_count;
+     float raw_rpm = (pps / motion_cfg::kPulsesPerWheelRev) * 60.0f;
+-    filtered_rpm_[i] = motion_cfg::kVelocityFilterAlpha * raw_rpm + (1.0f - motion_cfg::kVelocityFilterAlpha) * filtered_rpm_[i];
++    filtered_rpm_[i] = motion_safety::FilterWheelRpm(raw_rpm, filtered_rpm_[i]);
+   }
+ 
+   // 2. 里程计更新
+diff --git a/main/msg/motion_msg.h b/main/msg/motion_msg.h
+index aebabc8e..c6deca29 100644
+--- a/main/msg/motion_msg.h
++++ b/main/msg/motion_msg.h
+@@ -33,4 +33,11 @@ struct MotionMsg {
+ 
+     float vel_left = 0.0f;
+     float vel_right = 0.0f;
++
++    // Internal receive metadata and read-only watchdog telemetry (not ROS wire fields).
++    bool cmd_vel_has_command = false;
++    uint32_t cmd_vel_received_ms = 0;
++    uint32_t cmd_vel_received_sequence = 0;
++    uint32_t cmd_vel_applied_sequence = 0;
++    bool cmd_vel_timed_out = false;
+ };
+diff --git a/main/network/wifi_app.cpp b/main/network/wifi_app.cpp
+index 75071058..c7e16851 100644
+--- a/main/network/wifi_app.cpp
++++ b/main/network/wifi_app.cpp
+@@ -110,7 +110,7 @@ esp_err_t wifi_load_sta_credentials_or_default(char *ssid, size_t ssid_size,
+ 
+ static void fill_sta_config(wifi_config_t *wifi_config, const char *ssid, const char *password) {
+     memset(wifi_config, 0, sizeof(*wifi_config));
+-    strncpy(reinterpret_cast<char *>(wifi_config->sta.ssid), ssid, sizeof(wifi_config->sta.ssid) - 1);
++    memcpy(wifi_config->sta.ssid, ssid, strlen(ssid));
+     strncpy(reinterpret_cast<char *>(wifi_config->sta.password), password, sizeof(wifi_config->sta.password) - 1);
+     wifi_config->sta.threshold.authmode =
+         (password[0] == '\0') ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
+@@ -283,10 +283,13 @@ void wifi_init_espnow() {
+     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+     ESP_ERROR_CHECK(esp_wifi_start());
+     ESP_ERROR_CHECK(esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE));
++    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+ }
+ 
+ esp_err_t wifi_save_sta_credentials(const char *ssid, const char *password) {
+-    if (ssid == NULL || ssid[0] == '\0' || password == NULL) {
++    if (ssid == NULL || ssid[0] == '\0' || password == NULL ||
++        strlen(ssid) > 32 || strlen(password) > 63 ||
++        (password[0] != '\0' && strlen(password) < 8)) {
+         return ESP_ERR_INVALID_ARG;
+     }
+ 
+diff --git a/main/tasks/control/motion_task.cpp b/main/tasks/control/motion_task.cpp
+index 4ef537e1..fc52530d 100644
+--- a/main/tasks/control/motion_task.cpp
++++ b/main/tasks/control/motion_task.cpp
+@@ -1,15 +1,17 @@
+ #include "motion_config.h"
+-#include "system_globals.h"
+-#include "board.h" 
++#include "control/motion_safety.h"
++#include "system_globals.h"
++#include "board.h"
+ #include "msg/motion_msg.h"
+ #include "msg/pid_msg.h"
+-#include "msg/imu_msg.h"  
++#include "msg/imu_msg.h"
+ #include "esp_log.h"
+-#include <cmath>          
++#include <cmath>
+ 
+ static const char *TAG = "MOTION_TASK";
+ 
+ void motion_task(void *p) {
++    (void)p;
+     const float dt = leap_config::motion::kControlLoopDtS;
+     MotionMsg cmd_msg = {};
+     MotionMsg incoming_msg = {};
+@@ -18,16 +20,35 @@ void motion_task(void *p) {
+     MotionMsg status_msg = {};
+     PidMsg speed_msg;
+     PidMsg position_msg;
+-    
+-    ImuMsg imu_msg = {}; 
++
++    ImuMsg imu_msg = {};
+ 
+     int current_mode = 0;
+     bool was_gamepad_override_active = false;
++    motion_safety::CmdVelWatchdog cmd_vel_watchdog;
+ 
+-    auto apply_command = [&](const MotionMsg& command) {
++    auto expire_micro_ros_command = [&]() {
++        // Invalidate cached receipt metadata too, so handover cannot revive an expired command.
++        motion_safety::ClearVelocityTargets(&active_cmd);
++        active_cmd.cmd_vel_has_command = false;
++        if (motion_safety::IsMicroRosVelocity(cmd_msg)) {
++            motion_safety::ClearVelocityTargets(&cmd_msg);
++            cmd_msg.cmd_vel_has_command = false;
++        }
++        current_mode = 0;
++        robot.Stop();
++        system_globals().flags.motion_busy = false;
++    };
++
++    auto apply_command = [&](const MotionMsg& command, uint32_t now_ms) {
++        if (!cmd_vel_watchdog.CanApply(command, now_ms)) {
++            expire_micro_ros_command();
++            return;
++        }
+         current_mode = command.control_mode;
+ 
+         if (current_mode == 0) {
++            cmd_vel_watchdog.MarkApplied(command);
+             robot.Drive(command.target_vx, command.target_vy, command.target_wz);
+         } else if (current_mode == 1) {
+             robot.MoveToPosition(command.target_x, command.target_y, command.target_yaw);
+@@ -42,26 +63,33 @@ void motion_task(void *p) {
+             ESP_LOGW(TAG, "Unsupported motion mode: %d", current_mode);
+         }
+     };
+-    
++
+     while (1) {
+         xQueuePeek(system_globals().queues.imu_state, &imu_msg, 0);
+-                 
++
+         // 1. 接收底层运动指令 (指令状态机)
+         const bool nav_cmd_received = xQueueReceive(system_globals().queues.motion_cmd, &incoming_msg, 0) == pdTRUE;
+         if (nav_cmd_received) {
+             cmd_msg = incoming_msg;
++            cmd_vel_watchdog.Observe(incoming_msg);
+         }
++        const uint32_t now_ms = static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
++        cmd_vel_watchdog.Update(now_ms);
+ 
+         const bool gamepad_override_active = system_globals().flags.gamepad_override_active;
+         if (gamepad_override_active &&
+             xQueuePeek(system_globals().queues.gamepad_motion_cmd, &gamepad_cmd, 0) == pdTRUE) {
+             active_cmd = gamepad_cmd;
+-            apply_command(active_cmd);
++            apply_command(active_cmd, now_ms);
+         } else if (nav_cmd_received || was_gamepad_override_active) {
+             active_cmd = cmd_msg;
+-            apply_command(active_cmd);
++            apply_command(active_cmd, now_ms);
+         }
+         was_gamepad_override_active = gamepad_override_active;
++        if (motion_safety::IsMicroRosVelocity(active_cmd) &&
++            !cmd_vel_watchdog.CanApply(active_cmd, now_ms)) {
++            expire_micro_ros_command();
++        }
+ 
+         // 2. 接收 PID 指令 (速度环)
+         if (xQueueReceive(system_globals().queues.speedpid_cmd, &speed_msg, 0) == pdTRUE) {
+@@ -70,7 +98,7 @@ void motion_task(void *p) {
+             ESP_LOGI(TAG, "Speed PID updated: kp=%.3f, ki=%.3f, kd=%.3f",
+                      speed_msg.kp, speed_msg.ki, speed_msg.kd);
+         }
+-        
++
+         // 3. 接收 PID 指令 (位置环)
+         if (xQueueReceive(system_globals().queues.positionpid_cmd, &position_msg, 0) == pdTRUE) {
+             robot.SetPositionPidGains(position_msg.kp, position_msg.ki, position_msg.kd);
+@@ -78,32 +106,43 @@ void motion_task(void *p) {
+             ESP_LOGI(TAG, "Position PID updated: kp=%.3f, ki=%.3f, kd=%.3f",
+                      position_msg.kp, position_msg.ki, position_msg.kd);
+         }
+-
++
+         // 4. 执行物理控制循环
+         if (system_globals().flags.emergency_stop) {
+             robot.Stop();
+             system_globals().flags.motion_busy = false;
+         } else {
+-            float imu_yaw_rad = imu_msg.yaw * (M_PI / 180.0f); 
++            float imu_yaw_rad = imu_msg.yaw * (M_PI / 180.0f);
+             robot.Update(dt, imu_yaw_rad);
+             if (current_mode == 2 && !robot.IsBusy()) {
+                 system_globals().flags.motion_busy = false;
+             }
+         }
+-        
+-        // 5. 更新遥测状态并上报
+-        robot.GetVelocity(&status_msg.vx, &status_msg.vy, &status_msg.wz);
+-        robot.GetOdometry(&status_msg.x, &status_msg.y, &status_msg.yaw); 
+-        robot.GetOdometryQuaternion(&status_msg.qw,&status_msg.qx,&status_msg.qy,&status_msg.qz);
+-
++
++        // 5. 更新遥测状态并上报
++        robot.GetVelocity(&status_msg.vx, &status_msg.vy, &status_msg.wz);
++        robot.GetOdometry(&status_msg.x, &status_msg.y, &status_msg.yaw);
++        robot.GetOdometryQuaternion(&status_msg.qw,&status_msg.qx,&status_msg.qy,&status_msg.qz);
++
+         robot.GetAllMotorVelocities(&status_msg.vel_left, &status_msg.vel_right);
+-        
++
+         status_msg.control_mode = active_cmd.control_mode;
+         status_msg.source = active_cmd.source;
+         status_msg.target_vx = active_cmd.target_vx;
+-        
++        status_msg.target_vy = active_cmd.target_vy;
++        status_msg.target_wz = active_cmd.target_wz;
++        status_msg.target_x = active_cmd.target_x;
++        status_msg.target_y = active_cmd.target_y;
++        status_msg.target_yaw = active_cmd.target_yaw;
++        status_msg.motor_id = active_cmd.motor_id;
++        status_msg.target_motor_v = active_cmd.target_motor_v;
++        if (system_globals().flags.emergency_stop) {
++            motion_safety::ClearVelocityTargets(&status_msg);
++        }
++        cmd_vel_watchdog.WriteStatus(&status_msg);
++
+         xQueueOverwrite(system_globals().queues.motion_state, &status_msg);
+-        
++
+         vTaskDelay(pdMS_TO_TICKS(leap_config::motion::kControlLoopPeriodMs));
+-    }
++    }
+ }
+diff --git a/main/tasks/network/mavlink/mavlink_common.cpp b/main/tasks/network/mavlink/mavlink_common.cpp
+index f04d813f..e182b9d4 100644
+--- a/main/tasks/network/mavlink/mavlink_common.cpp
++++ b/main/tasks/network/mavlink/mavlink_common.cpp
+@@ -1,3 +1,6 @@
++#include "runtime_tuning_store.h"
++#include "firmware_version.h"
++#include "esp_timer.h"
+ #include "motion_config.h"
+ #include "system_globals.h"
+ #include "mavlink_common.h"
+@@ -957,10 +960,13 @@ void mavlink_common_publish(
+     };
+ 
+         uint32_t time_boot_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+-        state->loop_counter++;
++        const RuntimeTuning tuning = runtime_tuning_get();
++        const int64_t now_us = esp_timer_get_time();
++        const bool fast_due = state->fast_gate.due(now_us, tuning.telemetry_hz);
++        const bool slow_due = state->slow_gate.due(now_us, tuning.slow_telemetry_hz);
+ 
+         ImuMsg imu_state;
+-        if (xQueuePeek(system_globals().queues.imu_state, &imu_state, 0) == pdTRUE) {
++        if (fast_due && xQueuePeek(system_globals().queues.imu_state, &imu_state, 0) == pdTRUE) {
+             float roll_rad = DEG2RAD(imu_state.roll);
+             float pitch_rad = DEG2RAD(imu_state.pitch);
+             float yaw_rad = DEG2RAD(imu_state.yaw);
+@@ -994,7 +1000,7 @@ void mavlink_common_publish(
+         }
+ 
+         MotionMsg motion_state;
+-        if (xQueuePeek(system_globals().queues.motion_state, &motion_state, 0) == pdTRUE) {
++        if (fast_due && xQueuePeek(system_globals().queues.motion_state, &motion_state, 0) == pdTRUE) {
+             const uint64_t time_usec = static_cast<uint64_t>(time_boot_ms) * 1000ULL;
+ 
+             float q[4] = {
+@@ -1034,7 +1040,7 @@ void mavlink_common_publish(
+             SendMavlinkMessage(tx_route, tx_msg);
+         }
+ 
+-        if (state->loop_counter % 50 == 0) {
++        if (state->heartbeat_gate.due(now_us, 1)) {
+             mavlink_msg_heartbeat_pack(sys_id, comp_id, &tx_msg, MAV_TYPE_GROUND_ROVER, MAV_AUTOPILOT_GENERIC, 0, 0, MAV_STATE_ACTIVE);
+             SendMavlinkMessage(tx_route, tx_msg);
+ 
+@@ -1067,7 +1073,7 @@ void mavlink_common_publish(
+ 
+                 snprintf(vendor_name, sizeof(vendor_name), "Maturo");
+                 snprintf(model_name, sizeof(model_name), "Driver");
+-                snprintf(software_version, sizeof(software_version), "v2.2");
++                snprintf(software_version, sizeof(software_version), "%s", leap_config::firmware::kVersion);
+                 snprintf(hardware_version, sizeof(hardware_version), "ESP32");
+                 snprintf(serial_number, sizeof(serial_number), "%s", system_globals().runtime.device_name);
+ 
+@@ -1088,7 +1094,7 @@ void mavlink_common_publish(
+             }
+         }
+ 
+-        if (state->loop_counter % 5 == 0) {
++        if (slow_due) {
+             UltrasonicMsg ultrasonic_state;
+             if (xQueuePeek(system_globals().queues.ultrasonic_state, &ultrasonic_state, 0) == pdTRUE) {
+                 const float q[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+@@ -1140,7 +1146,7 @@ void mavlink_common_publish(
+         }
+ 
+         const uint32_t lidar_sequence = system_globals().flags.lidar_scan_sequence;
+-        if (lidar_sequence != state->last_lidar_sequence) {
++        if (slow_due && lidar_sequence != state->last_lidar_sequence) {
+             LidarMsg lidar_state;
+             if (xQueuePeek(system_globals().queues.lidar_state, &lidar_state, 0) == pdTRUE) {
+                 SendObstacleDistanceFullScan(
+diff --git a/main/tasks/network/mavlink/mavlink_common.h b/main/tasks/network/mavlink/mavlink_common.h
+index 8cc9a9c2..81c399cc 100644
+--- a/main/tasks/network/mavlink/mavlink_common.h
++++ b/main/tasks/network/mavlink/mavlink_common.h
+@@ -4,6 +4,7 @@
+ #include <stdint.h>
+ 
+ #include "my_robot/mavlink.h"
++#include "runtime_tuning.h"
+ 
+ enum class MavlinkTransportSource : uint8_t {
+     kUdp = 0,
+@@ -16,7 +17,9 @@ struct MavlinkTransport {
+ };
+ 
+ struct MavlinkPublishState {
+-    uint32_t loop_counter;
++    TelemetryGate fast_gate;
++    TelemetryGate slow_gate;
++    TelemetryGate heartbeat_gate;
+     uint32_t last_lidar_sequence;
+     bool component_info_sent;
+ };
+diff --git a/main/tasks/network/microros/microros_publishers.cpp b/main/tasks/network/microros/microros_publishers.cpp
+index f38442e8..4e2d3be8 100644
+--- a/main/tasks/network/microros/microros_publishers.cpp
++++ b/main/tasks/network/microros/microros_publishers.cpp
+@@ -1,5 +1,7 @@
+ #include "microros_internal.h"
+ #include "microros_time_sync.h"
++#include "runtime_tuning_store.h"
++#include "esp_timer.h"
+ 
+ namespace microros {
+ 
+@@ -193,21 +195,25 @@ void publish_state_timer(rcl_timer_t *timer, int64_t) {
+         return;
+     }
+ 
+-    ++s_publish_tick;
++    const RuntimeTuning tuning = runtime_tuning_get();
++    static TelemetryGate fast_gate, slow_gate, wifi_gate;
++    const int64_t now_us = esp_timer_get_time();
++    const bool fast_due = fast_gate.due(now_us, tuning.telemetry_hz);
++    const bool slow_due = slow_gate.due(now_us, tuning.slow_telemetry_hz);
+     int64_t stamp_ms = 0;
+     if (get_synchronized_time_ms(&stamp_ms)) {
+-        publish_odom(stamp_ms);
+-        publish_imu(stamp_ms);
+-
+-        if ((s_publish_tick % ros_cfg::kSlowPublishDivider) == 0) {
++        if (fast_due) {
++            publish_odom(stamp_ms);
++            publish_imu(stamp_ms);
++        }
++        if (slow_due) {
+             publish_scan(stamp_ms);
+             publish_battery(stamp_ms);
+             publish_ultrasonic(stamp_ms);
+         }
+     }
+-    if ((s_publish_tick % ros_cfg::kWifiConfigPublishTicks) == 0) {
+-        publish_wifi_config();
+-    }
++    // Keep discovery/config traffic independent of experimental telemetry rate.
++    if (wifi_gate.due(now_us, 1)) publish_wifi_config();
+ }
+ 
+ }  // namespace microros
+diff --git a/main/tasks/network/microros/microros_subscribers.cpp b/main/tasks/network/microros/microros_subscribers.cpp
+index fdb190d6..2a756727 100644
+--- a/main/tasks/network/microros/microros_subscribers.cpp
++++ b/main/tasks/network/microros/microros_subscribers.cpp
+@@ -1,4 +1,9 @@
+ #include "microros_internal.h"
++#include "control/motion_safety.h"
++
++static_assert(sizeof(double) == 8, "ROS float64 requires an 8-byte double");
++static_assert(sizeof(geometry_msgs__msg__Twist{}.linear.x) == 8,
++              "Twist velocity fields must remain ROS float64");
+ 
+ namespace microros {
+ 
+@@ -7,14 +12,19 @@ void handle_cmd_vel(const geometry_msgs__msg__Twist *msg) {
+         return;
+     }
+ 
++    static uint32_t received_sequence = 0;
++    const uint32_t next_sequence = received_sequence + 1;
++    const uint32_t now_ms = static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
+     MotionMsg cmd = {};
+-    cmd.source = MOTION_SRC_MICROROS;
+-    cmd.control_mode = 0;
+-    cmd.target_vx = static_cast<float>(msg->linear.x * 1000.0);
+-    cmd.target_vy = static_cast<float>(msg->linear.y * 1000.0);
+-    cmd.target_wz = static_cast<float>(msg->angular.z);
+-    xQueueOverwrite(system_globals().queues.motion_cmd, &cmd);
+-    system_globals().flags.emergency_stop = false;
++    if (!motion_safety::MakeMicroRosVelocity(msg->linear.x, msg->linear.y, msg->angular.z,
++                                             now_ms, next_sequence, &cmd)) {
++        ESP_LOGW(kTag, "Rejected non-finite or unrepresentable cmd_vel");
++        return;
++    }
++    if (xQueueOverwrite(system_globals().queues.motion_cmd, &cmd) == pdPASS) {
++        received_sequence = next_sequence;
++        system_globals().flags.emergency_stop = false;
++    }
+ }
+ 
+ static void copy_host_info_field(char *out, size_t out_size, const char *start, size_t len) {
+diff --git a/main/tasks/network/provision/provision_portal.cpp b/main/tasks/network/provision/provision_portal.cpp
+index 4c6188f9..730f9a3c 100644
+--- a/main/tasks/network/provision/provision_portal.cpp
++++ b/main/tasks/network/provision/provision_portal.cpp
+@@ -1,6 +1,11 @@
+ #include "provision_portal.h"
+ #include "provision_portal_page.h"
+ #include "system_globals.h"
++#include "firmware_version.h"
++#include "runtime_tuning_store.h"
++#include "runtime_tuning_http.h"
++#include "esp_app_desc.h"
++#include "motion_config.h"
+ #include "camera_i2c_client.h"
+ #include "wifi_app.h"
+ #include "msg/battery_msg.h"
+@@ -559,6 +564,18 @@ static esp_err_t status_get_handler(httpd_req_t *req) {
+         kStatusJsonSize,
+         &offset,
+         SystemGlobals::WifiCommModeToRuntimeValue(system_globals().runtime.wifi_comm_mode));
++    const esp_app_desc_t *app = esp_app_get_description();
++    char app_sha[65] = {};
++    for (size_t i = 0; i < sizeof(app->app_elf_sha256); ++i) snprintf(app_sha + i * 2, 3, "%02x", app->app_elf_sha256[i]);
++    ok = ok && append_format(s_status_json, kStatusJsonSize, &offset,
++        ",\"firmware\":{\"version\":\"%s\",\"motion_safety_revision\":%u,\"idf_version\":\"%s\",\"project_name\":\"%s\",\"build\":\"%s %s\",\"app_sha256\":\"%s\"}",
++        leap_config::firmware::kVersion, leap_config::firmware::kMotionSafetyRevision,
++        app->idf_ver, app->project_name, app->date, app->time, app_sha);
++    const RuntimeTuning tuning = runtime_tuning_get();
++    ok = ok && append_format(s_status_json, kStatusJsonSize, &offset,
++        ",\"tuning\":{\"telemetry_hz\":%lu,\"slow_telemetry_hz\":%lu,\"gyro_scale_x\":%.6f,\"gyro_scale_y\":%.6f,\"gyro_scale_z\":%.6f}",
++        static_cast<unsigned long>(tuning.telemetry_hz), static_cast<unsigned long>(tuning.slow_telemetry_hz),
++        tuning.gyro_scale_x, tuning.gyro_scale_y, tuning.gyro_scale_z);
+     ok = ok && append_text(s_status_json, kStatusJsonSize, &offset, ",\"runtime\":{\"comm_mode\":");
+     ok = ok && append_json_string(
+         s_status_json,
+@@ -577,6 +594,9 @@ static esp_err_t status_get_handler(httpd_req_t *req) {
+     ok = ok && append_text(s_status_json, kStatusJsonSize, &offset, ",\"wifi\":{\"mode\":");
+     ok = ok && append_json_string(s_status_json, kStatusJsonSize, &offset, wifi_mode_to_string(wifi_mode));
+     ok = ok && append_format(s_status_json, kStatusJsonSize, &offset, ",\"sta_connected\":%s", sta_connected ? "true" : "false");
++    wifi_ps_type_t wifi_ps;
++    if (esp_wifi_get_ps(&wifi_ps) == ESP_OK) ok = ok && append_format(s_status_json, kStatusJsonSize, &offset, ",\"power_save\":%u", static_cast<unsigned>(wifi_ps));
++    else ok = ok && append_text(s_status_json, kStatusJsonSize, &offset, ",\"power_save\":null");
+     if (sta_connected) {
+         ok = ok && append_text(s_status_json, kStatusJsonSize, &offset, ",\"ssid\":");
+         ok = ok && append_json_string(s_status_json, kStatusJsonSize, &offset, reinterpret_cast<const char *>(ap_info.ssid));
+@@ -671,6 +691,25 @@ static esp_err_t status_get_handler(httpd_req_t *req) {
+         motion.vel_left,
+         motion.vel_right);
+ 
++    ok = ok && append_format(
++        s_status_json, kStatusJsonSize, &offset,
++        ",\"cmd_vel_watchdog\":{\"enabled\":true,\"timeout_ms\":%lu,\"has_command\":%s,\"last_cmd_age_ms\":",
++        static_cast<unsigned long>(leap_config::motion::kMicroRosCommandTimeoutMs),
++        has_motion && motion.cmd_vel_has_command ? "true" : "false");
++    if (has_motion && motion.cmd_vel_has_command) {
++        const uint32_t now_ms = static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
++        ok = ok && append_format(s_status_json, kStatusJsonSize, &offset, "%lu",
++            static_cast<unsigned long>(static_cast<uint32_t>(now_ms - motion.cmd_vel_received_ms)));
++    } else {
++        ok = ok && append_text(s_status_json, kStatusJsonSize, &offset, "null");
++    }
++    ok = ok && append_format(
++        s_status_json, kStatusJsonSize, &offset,
++        ",\"timed_out\":%s,\"received_sequence\":%lu,\"applied_sequence\":%lu}",
++        has_motion && motion.cmd_vel_timed_out ? "true" : "false",
++        static_cast<unsigned long>(motion.cmd_vel_received_sequence),
++        static_cast<unsigned long>(motion.cmd_vel_applied_sequence));
++
+     ok = ok && append_format(
+         s_status_json,
+         kStatusJsonSize,
+@@ -1111,6 +1150,7 @@ void provision_portal_start(void) {
+     httpd_register_uri_handler(server, &uri_provision);
+     httpd_register_uri_handler(server, &uri_runtime_config);
+     httpd_register_uri_handler(server, &uri_camera_provision);
++    register_runtime_tuning_http(server);
+     httpd_register_uri_handler(server, &uri_captive_all);
+ 
+     xTaskCreate(captive_dns_task, "captive_dns", 4096, NULL, 3, NULL);
+diff --git a/main/tasks/network/provision/provision_portal_page.h b/main/tasks/network/provision/provision_portal_page.h
+index e83e2377..644085de 100644
+--- a/main/tasks/network/provision/provision_portal_page.h
++++ b/main/tasks/network/provision/provision_portal_page.h
+@@ -351,6 +351,7 @@ static const char kProvisionHtmlTemplate[] = R"HTML(
+   </style>
+ </head>
+ <body>
++  <a href="/tuning" style="position:fixed;top:10px;right:18px;z-index:10">实验参数 / Runtime tuning</a>
+   <main class="shell">
+     <section class="hero">
+       <div class="hero-bar">
+diff --git a/main/tasks/sensors/imu_task.cpp b/main/tasks/sensors/imu_task.cpp
+index 501499d7..29413387 100644
+--- a/main/tasks/sensors/imu_task.cpp
++++ b/main/tasks/sensors/imu_task.cpp
+@@ -1,15 +1,20 @@
+ #include "system_globals.h"
+ #include "board.h" // 假设 imu 实例在此声明
+ #include "msg/imu_msg.h"
++#include "runtime_tuning_store.h"
+ 
+ #include "esp_log.h" // 确保包含了日志打印头文件
+ 
+ void imu_task(void *p) {
+     ImuMsg msg;
+-    uint8_t print_counter = 0; // 【新增】用于降低串口打印频率的计数器
++
+ 
+     while (1) {
+-        imu.Update();
++        const RuntimeTuning tuning = runtime_tuning_get();
++        if (imu.Update(tuning.gyro_scale_x, tuning.gyro_scale_y, tuning.gyro_scale_z) != ESP_OK) {
++            vTaskDelay(pdMS_TO_TICKS(20));
++            continue;
++        }
+         imu.GetQuaternion(msg.qw, msg.qx, msg.qy, msg.qz);
+         msg.roll = imu.GetRoll();
+         msg.pitch = imu.GetPitch();
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index d4f238e3..11dee9e8 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -1,5 +1,5 @@
+ cmake_minimum_required(VERSION 3.16)
+-project(microros_time_sync_tests LANGUAGES CXX)
++project(leap_firmware_host_tests LANGUAGES CXX)
+ 
+ enable_testing()
+ add_executable(microros_time_sync_test
+@@ -12,3 +12,41 @@ target_include_directories(microros_time_sync_test PRIVATE
+     ../main/config
+     ../main/tasks/network/microros)
+ add_test(NAME microros_time_sync COMMAND microros_time_sync_test)
++
++add_executable(motion_safety_test motion_safety_test.cpp ../main/control/differential_kinematics.cpp)
++target_compile_features(motion_safety_test PRIVATE cxx_std_11)
++target_compile_options(motion_safety_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
++target_include_directories(motion_safety_test PRIVATE ../main ../main/config ../main/control)
++add_test(NAME motion_safety COMMAND motion_safety_test)
++
++add_executable(motion_task_watchdog_test motion_task_watchdog_test.cpp ../main/tasks/control/motion_task.cpp)
++target_compile_features(motion_task_watchdog_test PRIVATE cxx_std_17)
++target_compile_options(motion_task_watchdog_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
++target_include_directories(motion_task_watchdog_test PRIVATE motion_stubs stubs ../main ../main/config ../main/control)
++add_test(NAME motion_task_watchdog COMMAND motion_task_watchdog_test)
++
++add_executable(runtime_tuning_test runtime_tuning_test.cpp ../main/config/runtime_tuning_store.cpp)
++target_compile_features(runtime_tuning_test PRIVATE cxx_std_17)
++target_compile_options(runtime_tuning_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
++target_include_directories(runtime_tuning_test PRIVATE tuning_stubs ../main/config)
++add_test(NAME runtime_tuning COMMAND runtime_tuning_test)
++
++add_executable(imu_scale_test imu_scale_test.cpp ../components/lsm6ds3_driver/lsm6ds3_driver.cpp)
++target_compile_features(imu_scale_test PRIVATE cxx_std_17)
++target_compile_options(imu_scale_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
++target_include_directories(imu_scale_test PRIVATE imu_stubs stubs ../components/lsm6ds3_driver)
++add_test(NAME imu_scale COMMAND imu_scale_test)
++
++# Point at the cJSON source shipped with the same ESP-IDF used for firmware.
++set(CJSON_SOURCE_DIR "" CACHE PATH "ESP-IDF components/json/cJSON directory for HTTP handler tests")
++if(CJSON_SOURCE_DIR)
++    enable_language(C)
++    add_executable(tuning_http_test tuning_http_test.cpp
++        ../main/tasks/network/provision/runtime_tuning_http.cpp
++        "${CJSON_SOURCE_DIR}/cJSON.c")
++    target_compile_features(tuning_http_test PRIVATE cxx_std_17)
++    target_compile_options(tuning_http_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
++    target_include_directories(tuning_http_test PRIVATE http_stubs ../main/config
++        ../main/tasks/network/provision "${CJSON_SOURCE_DIR}")
++    add_test(NAME tuning_http COMMAND tuning_http_test)
++endif()
+diff --git a/main/config/firmware_version.h b/main/config/firmware_version.h
+new file mode 100644
+index 00000000..7e277088
+--- /dev/null
++++ b/main/config/firmware_version.h
+@@ -0,0 +1,8 @@
++#pragma once
++
++namespace leap_config {
++namespace firmware {
++static constexpr const char* kVersion = "2026.11.16-runtime1";
++static constexpr unsigned kMotionSafetyRevision = 1;
++}  // namespace firmware
++}  // namespace leap_config
+diff --git a/main/config/runtime_tuning.h b/main/config/runtime_tuning.h
+new file mode 100644
+index 00000000..0fe6ce9a
+--- /dev/null
++++ b/main/config/runtime_tuning.h
+@@ -0,0 +1,40 @@
++#pragma once
++
++#include <cmath>
++#include <cstdint>
++
++struct RuntimeTuning {
++    uint32_t schema_version = 1;
++    uint32_t telemetry_hz = 50;
++    uint32_t slow_telemetry_hz = 10;
++    float gyro_scale_x = 1.0f;
++    float gyro_scale_y = 1.0f;
++    float gyro_scale_z = 1.0f;
++};
++
++inline bool runtime_tuning_valid(const RuntimeTuning &value) {
++    return value.schema_version == 1 && value.telemetry_hz >= 1 && value.telemetry_hz <= 50 &&
++           value.slow_telemetry_hz >= 1 && value.slow_telemetry_hz <= 10 &&
++           std::isfinite(value.gyro_scale_x) && value.gyro_scale_x >= 0.5f && value.gyro_scale_x <= 2.0f &&
++           std::isfinite(value.gyro_scale_y) && value.gyro_scale_y >= 0.5f && value.gyro_scale_y <= 2.0f &&
++           std::isfinite(value.gyro_scale_z) && value.gyro_scale_z >= 0.5f && value.gyro_scale_z <= 2.0f;
++}
++
++// Called from the existing 20 ms network service loop. Preserve average rate at
++// non-divisors of 50 Hz, while dropping missed deadlines instead of bursting.
++struct TelemetryGate {
++    int64_t next_us = 0;
++    uint32_t rate_hz = 0;
++    bool due(int64_t now_us, uint32_t requested_hz) {
++        if (requested_hz == 0) return false;
++        if (rate_hz != requested_hz) {
++            rate_hz = requested_hz;
++            next_us = now_us;
++        }
++        if (now_us < next_us) return false;
++        const int64_t period = (1000000LL + requested_hz - 1) / requested_hz;
++        next_us += period;
++        if (next_us <= now_us) next_us = now_us + period;
++        return true;
++    }
++};
+diff --git a/main/config/runtime_tuning_store.cpp b/main/config/runtime_tuning_store.cpp
+new file mode 100644
+index 00000000..7ccb0fac
+--- /dev/null
++++ b/main/config/runtime_tuning_store.cpp
+@@ -0,0 +1,58 @@
++#include "runtime_tuning_store.h"
++#include "freertos/FreeRTOS.h"
++#include "freertos/semphr.h"
++#include "nvs.h"
++
++static RuntimeTuning s_tuning;
++static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
++static SemaphoreHandle_t s_save_mutex = nullptr;
++static constexpr const char *kNamespace = "experiment_cfg";
++static constexpr const char *kKey = "tuning_v1";
++
++RuntimeTuning runtime_tuning_get() {
++    portENTER_CRITICAL(&s_lock);
++    RuntimeTuning value = s_tuning;
++    portEXIT_CRITICAL(&s_lock);
++    return value;
++}
++
++static void apply(const RuntimeTuning &value) {
++    portENTER_CRITICAL(&s_lock);
++    s_tuning = value;
++    portEXIT_CRITICAL(&s_lock);
++}
++
++esp_err_t runtime_tuning_init() {
++    if (s_save_mutex == nullptr) s_save_mutex = xSemaphoreCreateMutex();
++    if (s_save_mutex == nullptr) return ESP_ERR_NO_MEM;
++    apply(RuntimeTuning{});
++    nvs_handle_t handle;
++    esp_err_t err = nvs_open(kNamespace, NVS_READONLY, &handle);
++    if (err != ESP_OK) return err;
++    RuntimeTuning value;
++    size_t size = sizeof(value);
++    err = nvs_get_blob(handle, kKey, &value, &size);
++    nvs_close(handle);
++    if (err == ESP_OK) {
++        if (size != sizeof(value)) return ESP_ERR_INVALID_SIZE;
++        if (!runtime_tuning_valid(value)) return ESP_ERR_INVALID_ARG;
++        apply(value);
++    }
++    return err;
++}
++
++esp_err_t runtime_tuning_save(const RuntimeTuning &value) {
++    if (!runtime_tuning_valid(value)) return ESP_ERR_INVALID_ARG;
++    if (s_save_mutex == nullptr) return ESP_ERR_INVALID_STATE;
++    if (xSemaphoreTake(s_save_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) return ESP_ERR_TIMEOUT;
++    nvs_handle_t handle;
++    esp_err_t err = nvs_open(kNamespace, NVS_READWRITE, &handle);
++    if (err == ESP_OK) {
++        err = nvs_set_blob(handle, kKey, &value, sizeof(value));
++        if (err == ESP_OK) err = nvs_commit(handle);
++        nvs_close(handle);
++    }
++    if (err == ESP_OK) apply(value);
++    xSemaphoreGive(s_save_mutex);
++    return err;
++}
+diff --git a/main/config/runtime_tuning_store.h b/main/config/runtime_tuning_store.h
+new file mode 100644
+index 00000000..127eb049
+--- /dev/null
++++ b/main/config/runtime_tuning_store.h
+@@ -0,0 +1,9 @@
++#pragma once
++#include "esp_err.h"
++#include "runtime_tuning.h"
++
++// Call once after nvs_flash_init, before tasks are created. Missing config uses
++// defaults. Corrupt or newer records are reported and are never erased.
++esp_err_t runtime_tuning_init();
++RuntimeTuning runtime_tuning_get();
++esp_err_t runtime_tuning_save(const RuntimeTuning &value);
+diff --git a/main/control/motion_safety.h b/main/control/motion_safety.h
+new file mode 100644
+index 00000000..c8643845
+--- /dev/null
++++ b/main/control/motion_safety.h
+@@ -0,0 +1,111 @@
++#pragma once
++
++#include "motion_config.h"
++#include "msg/motion_msg.h"
++
++#include <cmath>
++#include <limits>
++
++// Pure helpers shared by the control loop and host regression tests; no RTOS/ROS dependencies.
++namespace motion_safety {
++
++inline bool IsMicroRosVelocity(const MotionMsg& command) {
++    return command.source == MOTION_SRC_MICROROS && command.control_mode == 0;
++}
++
++inline bool MakeMicroRosVelocity(double vx_m_s, double vy_m_s, double wz_rad_s,
++                                uint32_t received_ms, uint32_t sequence,
++                                MotionMsg* output) {
++    const double vx = vx_m_s * 1000.0;
++    const double vy = vy_m_s * 1000.0;
++    const double limit = std::numeric_limits<float>::max();
++    if (output == nullptr || !std::isfinite(vx) || !std::isfinite(vy) ||
++        !std::isfinite(wz_rad_s) || std::fabs(vx) > limit || std::fabs(vy) > limit ||
++        std::fabs(wz_rad_s) > limit) {
++        return false;
++    }
++    MotionMsg command = {};
++    command.source = MOTION_SRC_MICROROS;
++    command.target_vx = static_cast<float>(vx);
++    command.target_vy = static_cast<float>(vy);
++    command.target_wz = static_cast<float>(wz_rad_s);
++    command.cmd_vel_has_command = true;
++    command.cmd_vel_received_ms = received_ms;
++    command.cmd_vel_received_sequence = sequence;
++    *output = command;
++    return true;
++}
++
++inline void ClearVelocityTargets(MotionMsg* command) {
++    command->target_vx = 0.0f;
++    command->target_vy = 0.0f;
++    command->target_wz = 0.0f;
++    command->target_motor_v = 0.0f;
++}
++
++class CmdVelWatchdog {
++public:
++    void Observe(const MotionMsg& command) {
++        if (!IsMicroRosVelocity(command) || !command.cmd_vel_has_command) {
++            return;
++        }
++        has_command_ = true;
++        received_ms_ = command.cmd_vel_received_ms;
++        received_sequence_ = command.cmd_vel_received_sequence;
++        timed_out_ = false;
++    }
++
++    void Update(uint32_t now_ms) {
++        // Once expired, keep the lease expired through the 32-bit uptime wrap.
++        if (has_command_ && AgeMs(now_ms) >= leap_config::motion::kMicroRosCommandTimeoutMs) {
++            timed_out_ = true;
++        }
++    }
++
++    bool CanApply(const MotionMsg& command, uint32_t now_ms) const {
++        if (!IsMicroRosVelocity(command)) {
++            return true;
++        }
++        return command.cmd_vel_has_command && has_command_ && !timed_out_ &&
++               command.cmd_vel_received_sequence == received_sequence_ &&
++               static_cast<uint32_t>(now_ms - command.cmd_vel_received_ms) <
++                   leap_config::motion::kMicroRosCommandTimeoutMs;
++    }
++
++    void MarkApplied(const MotionMsg& command) {
++        if (IsMicroRosVelocity(command)) {
++            applied_sequence_ = command.cmd_vel_received_sequence;
++        }
++    }
++
++    uint32_t AgeMs(uint32_t now_ms) const {
++        return static_cast<uint32_t>(now_ms - received_ms_);
++    }
++
++    void WriteStatus(MotionMsg* status) const {
++        status->cmd_vel_has_command = has_command_;
++        status->cmd_vel_received_ms = received_ms_;
++        status->cmd_vel_received_sequence = received_sequence_;
++        status->cmd_vel_applied_sequence = applied_sequence_;
++        status->cmd_vel_timed_out = timed_out_;
++    }
++
++private:
++    bool has_command_ = false;
++    bool timed_out_ = false;
++    uint32_t received_ms_ = 0;
++    uint32_t received_sequence_ = 0;
++    uint32_t applied_sequence_ = 0;
++};
++
++inline float FilterWheelRpm(float raw_rpm, float previous_rpm) {
++    const float filtered = leap_config::motion::kVelocityFilterAlpha * raw_rpm +
++        (1.0f - leap_config::motion::kVelocityFilterAlpha) * previous_rpm;
++    // A float IIR otherwise remains at denorm_min forever with zero encoder input.
++    if (raw_rpm == 0.0f && std::fabs(filtered) < leap_config::motion::kVelocityZeroThresholdRpm) {
++        return 0.0f;
++    }
++    return filtered;
++}
++
++}  // namespace motion_safety
+diff --git a/main/tasks/network/provision/runtime_tuning_http.cpp b/main/tasks/network/provision/runtime_tuning_http.cpp
+new file mode 100644
+index 00000000..fe766392
+--- /dev/null
++++ b/main/tasks/network/provision/runtime_tuning_http.cpp
+@@ -0,0 +1,153 @@
++#include "runtime_tuning_http.h"
++#include "runtime_tuning_store.h"
++#include "firmware_version.h"
++#include "wifi_app.h"
++#include "app_runtime.h"
++#include "cJSON.h"
++#include "esp_app_desc.h"
++#include "esp_wifi.h"
++#include <cmath>
++#include <cstring>
++#include <cstdlib>
++
++static esp_err_t send_json(httpd_req_t *req, cJSON *root) {
++    if (!root) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "allocation failed");
++    char *body = cJSON_PrintUnformatted(root);
++    cJSON_Delete(root);
++    if (!body) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "allocation failed");
++    httpd_resp_set_type(req, "application/json");
++    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
++    esp_err_t err = httpd_resp_sendstr(req, body);
++    cJSON_free(body);
++    return err;
++}
++
++static cJSON *read_json(httpd_req_t *req) {
++    if (req->content_len < 2 || req->content_len > 512) return nullptr;
++    char body[513] = {};
++    size_t received = 0;
++    int timeouts = 0;
++    while (received < req->content_len) {
++        const int n = httpd_req_recv(req, body + received, req->content_len - received);
++        if (n == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts <= 3) continue;
++        if (n <= 0) return nullptr;
++        received += n;
++    }
++    if (memchr(body, '\0', received) != nullptr || strstr(body, "\\u0000") != nullptr) return nullptr;
++    cJSON *root = cJSON_ParseWithLengthOpts(body, received + 1, nullptr, true);
++    if (!cJSON_IsObject(root)) { cJSON_Delete(root); return nullptr; }
++    // Duplicate keys make a command ambiguous. Reject them before any NVS write.
++    for (const cJSON *a = root->child; a; a = a->next) {
++        for (const cJSON *b = a->next; b; b = b->next) {
++            if (strcmp(a->string, b->string) == 0) { cJSON_Delete(root); return nullptr; }
++        }
++    }
++    return root;
++}
++
++static cJSON *tuning_json() {
++    const RuntimeTuning value = runtime_tuning_get();
++    cJSON *root = cJSON_CreateObject();
++    if (!root) return nullptr;
++    cJSON_AddNumberToObject(root, "schema_version", value.schema_version);
++    cJSON_AddNumberToObject(root, "telemetry_hz", value.telemetry_hz);
++    cJSON_AddNumberToObject(root, "slow_telemetry_hz", value.slow_telemetry_hz);
++    cJSON_AddNumberToObject(root, "gyro_scale_x", value.gyro_scale_x);
++    cJSON_AddNumberToObject(root, "gyro_scale_y", value.gyro_scale_y);
++    cJSON_AddNumberToObject(root, "gyro_scale_z", value.gyro_scale_z);
++    cJSON_AddStringToObject(root, "firmware_version", leap_config::firmware::kVersion);
++    return root;
++}
++
++static esp_err_t tuning_get(httpd_req_t *req) { return send_json(req, tuning_json()); }
++
++static esp_err_t tuning_post(httpd_req_t *req) {
++    cJSON *root = read_json(req);
++    if (!root) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid JSON object");
++    RuntimeTuning next = runtime_tuning_get();
++    bool valid = root->child != nullptr;
++    for (cJSON *item = root->child; item && valid; item = item->next) {
++        if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble)) { valid = false; break; }
++        const double n = item->valuedouble;
++        if (strcmp(item->string, "telemetry_hz") == 0) {
++            valid = n >= 1 && n <= 50 && n == std::floor(n);
++            if (valid) next.telemetry_hz = static_cast<uint32_t>(n);
++        } else if (strcmp(item->string, "slow_telemetry_hz") == 0) {
++            valid = n >= 1 && n <= 10 && n == std::floor(n);
++            if (valid) next.slow_telemetry_hz = static_cast<uint32_t>(n);
++        } else if (strcmp(item->string, "gyro_scale_x") == 0) { valid = n >= 0.5 && n <= 2.0; if (valid) next.gyro_scale_x = static_cast<float>(n); }
++        else if (strcmp(item->string, "gyro_scale_y") == 0) { valid = n >= 0.5 && n <= 2.0; if (valid) next.gyro_scale_y = static_cast<float>(n); }
++        else if (strcmp(item->string, "gyro_scale_z") == 0) { valid = n >= 0.5 && n <= 2.0; if (valid) next.gyro_scale_z = static_cast<float>(n); }
++        else valid = false;
++    }
++    cJSON_Delete(root);
++    if (!valid || !runtime_tuning_valid(next)) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "unknown field or value out of range");
++    if (runtime_tuning_save(next) != ESP_OK) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "NVS save failed; live tuning unchanged");
++    cJSON *response = tuning_json();
++    if (response) { cJSON_AddBoolToObject(response, "saved", true); cJSON_AddBoolToObject(response, "restart", false); }
++    return send_json(req, response);
++}
++
++static esp_err_t wifi_get(httpd_req_t *req) {
++    char ssid[33] = {}, password[65] = {};
++    const esp_err_t err = wifi_load_sta_credentials_or_default(ssid, sizeof(ssid), password, sizeof(password));
++    cJSON *root = cJSON_CreateObject();
++    if (root) {
++        cJSON_AddStringToObject(root, "ssid", err == ESP_OK ? ssid : "");
++        cJSON_AddBoolToObject(root, "password_set", password[0] != '\0');
++        wifi_ps_type_t ps;
++        if (esp_wifi_get_ps(&ps) == ESP_OK) cJSON_AddNumberToObject(root, "power_save", ps);
++        else cJSON_AddNullToObject(root, "power_save");
++    }
++    memset(password, 0, sizeof(password));
++    return send_json(req, root);
++}
++
++static esp_err_t wifi_post(httpd_req_t *req) {
++    cJSON *root = read_json(req);
++    if (!root) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid JSON object");
++    cJSON *ssid = cJSON_GetObjectItemCaseSensitive(root, "ssid");
++    cJSON *password = cJSON_GetObjectItemCaseSensitive(root, "password");
++    bool valid = cJSON_IsString(ssid) && cJSON_IsString(password);
++    for (cJSON *item = root->child; item; item = item->next) {
++        if (strcmp(item->string, "ssid") != 0 && strcmp(item->string, "password") != 0) valid = false;
++    }
++    esp_err_t result = ESP_ERR_INVALID_ARG;
++    if (valid) result = wifi_save_sta_credentials(ssid->valuestring, password->valuestring);
++    cJSON_Delete(root);
++    if (result == ESP_ERR_INVALID_ARG) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "ssid: 1..32 bytes; password: empty or 8..63 bytes; both required");
++    if (result != ESP_OK) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "NVS save failed");
++    httpd_resp_set_type(req, "application/json");
++    const esp_err_t sent = httpd_resp_sendstr(req, "{\"saved\":true,\"restart\":true,\"delay_ms\":1200}");
++    app_runtime_restart_after_delay_ms(1200);
++    return sent;
++}
++
++static constexpr const char *kTuningPage = R"HTML(<!doctype html><html lang="zh"><meta charset="utf-8"><title>底盘实验参数</title>
++<style>body{font:16px sans-serif;max-width:700px;margin:30px auto}label{display:block;margin:14px 0}input{float:right;width:130px}pre{white-space:pre-wrap}</style>
++<h1>底盘实验参数</h1><p>保存后立即生效并写入 NVS；运动控制和 IMU 采样周期保持 20 ms。</p>
++<form id="settings"><label>快遥测 Hz（1–50）<input name="telemetry_hz" type="number" min="1" max="50" step="1" required></label>
++<label>慢遥测 Hz（1–10）<input name="slow_telemetry_hz" type="number" min="1" max="10" step="1" required></label>
++<label>陀螺 X 比例（0.5–2）<input name="gyro_scale_x" type="number" min="0.5" max="2" step="0.0001" required></label>
++<label>陀螺 Y 比例（0.5–2）<input name="gyro_scale_y" type="number" min="0.5" max="2" step="0.0001" required></label>
++<label>陀螺 Z 比例（0.5–2）<input name="gyro_scale_z" type="number" min="0.5" max="2" step="0.0001" required></label>
++<button type="submit" disabled>保存并应用</button></form><pre id="result"></pre>
++<p>micro-ROS 快组：odom、imu；慢组：scan、battery_state、ultrasonic。发布速率受网络和传感器产出限制。</p>
++<p>陀螺比例在去除零偏后、姿态积分前应用。切换比例不重置已累计姿态。</p><a href="/">返回状态与 Wi-Fi 配网页</a>
++<script>
++const form=document.getElementById('settings'),result=document.getElementById('result');
++async function load(){try{const r=await fetch('/api/tuning',{cache:'no-store'});if(!r.ok)throw new Error(await r.text());const j=await r.json();for(const e of form.elements)if(e.name)e.value=j[e.name];result.textContent='固件：'+j.firmware_version;form.querySelector('button').disabled=false;}catch(e){result.textContent=e.message;}}
++form.onsubmit=async e=>{e.preventDefault();const j={};for(const el of form.elements)if(el.name)j[el.name]=Number(el.value);try{const r=await fetch('/api/tuning',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(j)});const text=await r.text();result.textContent=(r.ok?'已保存：':'保存失败：')+text;}catch(err){result.textContent=err.message;}};load();
++</script></html>)HTML";
++static esp_err_t tuning_page(httpd_req_t *req) { httpd_resp_set_type(req, "text/html; charset=utf-8"); return httpd_resp_sendstr(req, kTuningPage); }
++
++void register_runtime_tuning_http(httpd_handle_t server) {
++    const httpd_uri_t routes[] = {
++        {.uri="/api/tuning", .method=HTTP_GET, .handler=tuning_get, .user_ctx=nullptr},
++        {.uri="/api/tuning", .method=HTTP_POST, .handler=tuning_post, .user_ctx=nullptr},
++        {.uri="/api/wifi", .method=HTTP_GET, .handler=wifi_get, .user_ctx=nullptr},
++        {.uri="/api/wifi", .method=HTTP_POST, .handler=wifi_post, .user_ctx=nullptr},
++        {.uri="/tuning", .method=HTTP_GET, .handler=tuning_page, .user_ctx=nullptr},
++    };
++    for (const auto &route : routes) ESP_ERROR_CHECK(httpd_register_uri_handler(server, &route));
++}
+diff --git a/main/tasks/network/provision/runtime_tuning_http.h b/main/tasks/network/provision/runtime_tuning_http.h
+new file mode 100644
+index 00000000..5df8a4c1
+--- /dev/null
++++ b/main/tasks/network/provision/runtime_tuning_http.h
+@@ -0,0 +1,3 @@
++#pragma once
++#include "esp_http_server.h"
++void register_runtime_tuning_http(httpd_handle_t server);
+diff --git a/tests/http_stubs/app_runtime.h b/tests/http_stubs/app_runtime.h
+new file mode 100644
+index 00000000..2a447cb3
+--- /dev/null
++++ b/tests/http_stubs/app_runtime.h
+@@ -0,0 +1,3 @@
++#pragma once
++#include <cstdint>
++void app_runtime_restart_after_delay_ms(uint32_t);
+diff --git a/tests/http_stubs/esp_app_desc.h b/tests/http_stubs/esp_app_desc.h
+new file mode 100644
+index 00000000..6f70f09b
+--- /dev/null
++++ b/tests/http_stubs/esp_app_desc.h
+@@ -0,0 +1 @@
++#pragma once
+diff --git a/tests/http_stubs/esp_err.h b/tests/http_stubs/esp_err.h
+new file mode 100644
+index 00000000..8087efb0
+--- /dev/null
++++ b/tests/http_stubs/esp_err.h
+@@ -0,0 +1,5 @@
++#pragma once
++#include <cassert>
++using esp_err_t = int;
++constexpr int ESP_OK=0, ESP_FAIL=-1, ESP_ERR_INVALID_ARG=2;
++#define ESP_ERROR_CHECK(expr) assert((expr)==ESP_OK)
+diff --git a/tests/http_stubs/esp_http_server.h b/tests/http_stubs/esp_http_server.h
+new file mode 100644
+index 00000000..8a8326fd
+--- /dev/null
++++ b/tests/http_stubs/esp_http_server.h
+@@ -0,0 +1,13 @@
++#pragma once
++#include <cstddef>
++#include "esp_err.h"
++struct httpd_req_t {size_t content_len;};
++using httpd_handle_t = void *;
++constexpr int HTTP_GET=0,HTTP_POST=1,HTTPD_500_INTERNAL_SERVER_ERROR=500,HTTPD_400_BAD_REQUEST=400,HTTPD_SOCK_ERR_TIMEOUT=-3;
++struct httpd_uri_t {const char *uri;int method;esp_err_t (*handler)(httpd_req_t*);void *user_ctx;};
++esp_err_t httpd_resp_send_err(httpd_req_t*,int,const char*);
++esp_err_t httpd_resp_set_type(httpd_req_t*,const char*);
++esp_err_t httpd_resp_set_hdr(httpd_req_t*,const char*,const char*);
++esp_err_t httpd_resp_sendstr(httpd_req_t*,const char*);
++int httpd_req_recv(httpd_req_t*,char*,size_t);
++esp_err_t httpd_register_uri_handler(httpd_handle_t,const httpd_uri_t*);
+diff --git a/tests/http_stubs/esp_wifi.h b/tests/http_stubs/esp_wifi.h
+new file mode 100644
+index 00000000..f0a8a6be
+--- /dev/null
++++ b/tests/http_stubs/esp_wifi.h
+@@ -0,0 +1,4 @@
++#pragma once
++#include "esp_err.h"
++using wifi_ps_type_t=int;
++esp_err_t esp_wifi_get_ps(wifi_ps_type_t*);
+diff --git a/tests/http_stubs/wifi_app.h b/tests/http_stubs/wifi_app.h
+new file mode 100644
+index 00000000..2ced9d45
+--- /dev/null
++++ b/tests/http_stubs/wifi_app.h
+@@ -0,0 +1,5 @@
++#pragma once
++#include <cstddef>
++#include "esp_err.h"
++esp_err_t wifi_load_sta_credentials_or_default(char*,size_t,char*,size_t);
++esp_err_t wifi_save_sta_credentials(const char*,const char*);
+diff --git a/tests/imu_scale_test.cpp b/tests/imu_scale_test.cpp
+new file mode 100644
+index 00000000..6d0a45a6
+--- /dev/null
++++ b/tests/imu_scale_test.cpp
+@@ -0,0 +1,28 @@
++#include "lsm6ds3_driver.h"
++#include <cassert>
++#include <cmath>
++#include <cstdint>
++static int64_t now_us=1000000;
++static int16_t raw[6]={100,200,-100,0,0,16384};
++static int writes=0,reg=0,read_offset=0;
++static bool fail_read=false;
++int64_t esp_timer_get_time(){return now_us;}
++void vTaskDelay(int ms){now_us+=ms*1000;}
++i2c_cmd_handle_t i2c_cmd_link_create(){writes=0;read_offset=0;return reinterpret_cast<void*>(1);}
++void i2c_master_write_byte(i2c_cmd_handle_t,uint8_t value,bool){if(++writes==2)reg=value;}
++void i2c_master_read(i2c_cmd_handle_t,uint8_t *dest,size_t n,int){
++ for(size_t i=0;i<n;++i){if(reg==0x0f)dest[i]=0x6a;else{const uint16_t value=static_cast<uint16_t>(raw[read_offset/2]);dest[i]=(read_offset%2)?value>>8:value&255;}++read_offset;}}
++void i2c_master_read_byte(i2c_cmd_handle_t cmd,uint8_t *dest,int ack){i2c_master_read(cmd,dest,1,ack);}
++esp_err_t i2c_master_cmd_begin(int,i2c_cmd_handle_t,int){return fail_read?ESP_FAIL:ESP_OK;}
++static bool near(float a,float b){return std::abs(a-b)<0.0002f;}
++int main(){
++ Lsm6ds3Imu imu(0,4,5);assert(imu.Init());
++ raw[0]=1100;raw[1]=-800;raw[2]=900;now_us+=20000;
++ assert(imu.Update(0.5f,1.5f,2.0f)==ESP_OK);
++ assert(near(imu.GetGyroX(),4.375f));assert(near(imu.GetGyroY(),-13.125f));assert(near(imu.GetGyroZ(),17.5f));
++ assert(near(imu.GetYaw(),0.35f)); // scale affects integration, not only telemetry
++ assert(near(imu.GetAccZ(),16384*0.061f/1000));
++ now_us+=20000;assert(imu.Update()==ESP_OK);assert(near(imu.GetGyroZ(),8.75f));assert(near(imu.GetYaw(),0.525f));
++ float w,x,y,z;imu.GetQuaternion(w,x,y,z);assert(near(w*w+x*x+y*y+z*z,1.0f));
++ fail_read=true;assert(imu.Update(2,2,2)==ESP_FAIL);assert(near(imu.GetYaw(),0.525f));
++}
+diff --git a/tests/imu_stubs/driver/gpio.h b/tests/imu_stubs/driver/gpio.h
+new file mode 100644
+index 00000000..6a9e64b0
+--- /dev/null
++++ b/tests/imu_stubs/driver/gpio.h
+@@ -0,0 +1,2 @@
++#pragma once
++using gpio_num_t = int;
+diff --git a/tests/imu_stubs/driver/i2c.h b/tests/imu_stubs/driver/i2c.h
+new file mode 100644
+index 00000000..b08b1e55
+--- /dev/null
++++ b/tests/imu_stubs/driver/i2c.h
+@@ -0,0 +1,18 @@
++#pragma once
++#include <cstddef>
++#include <cstdint>
++#include "esp_err.h"
++using i2c_port_t = int;
++using i2c_cmd_handle_t = void *;
++constexpr int I2C_MODE_MASTER=1,I2C_MASTER_WRITE=0,I2C_MASTER_READ=1,I2C_MASTER_ACK=0,I2C_MASTER_NACK=1;
++struct i2c_config_t {int mode, sda_io_num,scl_io_num;bool sda_pullup_en,scl_pullup_en;struct {int clk_speed;} master;};
++inline esp_err_t i2c_param_config(int,const i2c_config_t *) {return ESP_OK;}
++inline esp_err_t i2c_driver_install(int,int,int,int,int) {return ESP_OK;}
++i2c_cmd_handle_t i2c_cmd_link_create();
++inline void i2c_cmd_link_delete(i2c_cmd_handle_t) {}
++inline void i2c_master_start(i2c_cmd_handle_t) {}
++inline void i2c_master_stop(i2c_cmd_handle_t) {}
++void i2c_master_write_byte(i2c_cmd_handle_t,uint8_t,bool);
++void i2c_master_read(i2c_cmd_handle_t,uint8_t*,size_t,int);
++void i2c_master_read_byte(i2c_cmd_handle_t,uint8_t*,int);
++esp_err_t i2c_master_cmd_begin(int,i2c_cmd_handle_t,int);
+diff --git a/tests/imu_stubs/esp_err.h b/tests/imu_stubs/esp_err.h
+new file mode 100644
+index 00000000..36ff8a65
+--- /dev/null
++++ b/tests/imu_stubs/esp_err.h
+@@ -0,0 +1,5 @@
++#pragma once
++#include <cassert>
++using esp_err_t = int;
++constexpr int ESP_OK=0, ESP_FAIL=-1, ESP_ERR_INVALID_STATE=3, ESP_ERR_TIMEOUT=5;
++#define ESP_ERROR_CHECK(expr) assert((expr)==ESP_OK)
+diff --git a/tests/imu_stubs/esp_log.h b/tests/imu_stubs/esp_log.h
+new file mode 100644
+index 00000000..993b7178
+--- /dev/null
++++ b/tests/imu_stubs/esp_log.h
+@@ -0,0 +1,3 @@
++#pragma once
++#define ESP_LOGI(tag,...) (void)(tag)
++#define ESP_LOGE(tag,...) (void)(tag)
+diff --git a/tests/imu_stubs/freertos/FreeRTOS.h b/tests/imu_stubs/freertos/FreeRTOS.h
+new file mode 100644
+index 00000000..780f03f6
+--- /dev/null
++++ b/tests/imu_stubs/freertos/FreeRTOS.h
+@@ -0,0 +1,2 @@
++#pragma once
++#define pdMS_TO_TICKS(value) (value)
+diff --git a/tests/imu_stubs/freertos/task.h b/tests/imu_stubs/freertos/task.h
+new file mode 100644
+index 00000000..703cf770
+--- /dev/null
++++ b/tests/imu_stubs/freertos/task.h
+@@ -0,0 +1,2 @@
++#pragma once
++void vTaskDelay(int ms);
+diff --git a/tests/imu_stubs/i2c_bus_lock.h b/tests/imu_stubs/i2c_bus_lock.h
+new file mode 100644
+index 00000000..5043b432
+--- /dev/null
++++ b/tests/imu_stubs/i2c_bus_lock.h
+@@ -0,0 +1,3 @@
++#pragma once
++inline bool shared_i2c_bus_lock_take(int) {return true;}
++inline void shared_i2c_bus_lock_give() {}
+diff --git a/tests/motion_safety_test.cpp b/tests/motion_safety_test.cpp
+new file mode 100644
+index 00000000..2e49463f
+--- /dev/null
++++ b/tests/motion_safety_test.cpp
+@@ -0,0 +1,123 @@
++#include "motion_safety.h"
++#include "differential_kinematics.h"
++
++#include <cassert>
++#include <cmath>
++#include <cstdint>
++#include <iostream>
++#include <limits>
++
++namespace {
++MotionMsg Velocity(uint32_t now, uint32_t sequence = 1) {
++    MotionMsg command;
++    assert(motion_safety::MakeMicroRosVelocity(0.25, -0.01, -0.7, now, sequence, &command));
++    return command;
++}
++
++void TestInputsAndUnits() {
++    auto command = Velocity(123, 4);
++    assert(command.source == MOTION_SRC_MICROROS && command.control_mode == 0);
++    assert(command.target_vx == 250.0f && command.target_vy == -10.0f);
++    assert(std::fabs(command.target_wz + 0.7f) < 1e-6f);
++    assert(command.cmd_vel_has_command && command.cmd_vel_received_ms == 123);
++    assert(command.cmd_vel_received_sequence == 4);
++    const double invalid[] = {std::numeric_limits<double>::quiet_NaN(),
++        std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(),
++        std::numeric_limits<double>::max()};
++    for (double value : invalid) {
++        assert(!motion_safety::MakeMicroRosVelocity(value, 0, 0, 1, 5, &command));
++        assert(!motion_safety::MakeMicroRosVelocity(0, value, 0, 1, 5, &command));
++        assert(!motion_safety::MakeMicroRosVelocity(0, 0, value, 1, 5, &command));
++        assert(command.cmd_vel_received_sequence == 4);  // Rejection does not renew a lease.
++    }
++    assert(!motion_safety::MakeMicroRosVelocity(0, 0, 0, 0, 0, nullptr));
++}
++
++void TestLeaseAndHandover() {
++    motion_safety::CmdVelWatchdog watchdog;
++    auto command = Velocity(1000);
++    assert(!watchdog.CanApply(command, 1000));
++    watchdog.Observe(command);
++    watchdog.Update(1499);
++    assert(watchdog.CanApply(command, 1499));
++    watchdog.MarkApplied(command);
++    watchdog.Update(1500);
++    assert(!watchdog.CanApply(command, 1500));
++    // Cached navigation must not resume after a long gamepad override, or after uptime wraps.
++    assert(!watchdog.CanApply(command, 1001));
++    MotionMsg gamepad;
++    gamepad.source = MOTION_SRC_GAMEPAD;
++    assert(watchdog.CanApply(gamepad, 3000));
++    watchdog.Observe(gamepad);  // Other sources cannot renew the micro-ROS lease.
++    MotionMsg status;
++    watchdog.WriteStatus(&status);
++    assert(status.cmd_vel_timed_out && status.cmd_vel_received_sequence == 1);
++    assert(status.cmd_vel_applied_sequence == 1);
++    command = Velocity(4000, 2);
++    watchdog.Observe(command);
++    watchdog.Update(4000);
++    assert(watchdog.CanApply(command, 4000));
++    watchdog.WriteStatus(&status);
++    assert(!status.cmd_vel_timed_out && status.cmd_vel_received_sequence == 2);
++    assert(status.cmd_vel_applied_sequence == 1); // Receipt is distinct from application.
++    watchdog.MarkApplied(command);
++    watchdog.WriteStatus(&status);
++    assert(status.cmd_vel_applied_sequence == 2);
++    auto missing_receipt = command;
++    missing_receipt.cmd_vel_has_command = false;
++    assert(!watchdog.CanApply(missing_receipt, 4000));
++    auto stale_sequence = Velocity(4000, 1);
++    assert(!watchdog.CanApply(stale_sequence, 4000));
++    auto position = command;
++    position.control_mode = 1;
++    assert(watchdog.CanApply(position, 5000));
++    motion_safety::ClearVelocityTargets(&command);
++    assert(command.target_vx == 0 && command.target_vy == 0 && command.target_wz == 0);
++}
++
++void TestUptimeWrap() {
++    motion_safety::CmdVelWatchdog watchdog;
++    const uint32_t received = std::numeric_limits<uint32_t>::max() - 100;
++    auto command = Velocity(received, std::numeric_limits<uint32_t>::max());
++    watchdog.Observe(command);
++    watchdog.Update(398);  // 499 ms since reception, across uptime wrap.
++    assert(watchdog.AgeMs(398) == 499 && watchdog.CanApply(command, 398));
++    watchdog.Update(399);
++    assert(watchdog.AgeMs(399) == 500 && !watchdog.CanApply(command, 399));
++    command = Velocity(500, 0);  // Local sequence wrap is allowed; validity is explicit.
++    watchdog.Observe(command);
++    assert(watchdog.CanApply(command, 500));
++}
++
++void TestWheelFilterAndRosConversion() {
++    for (float initial : {1.0f, -1.0f, 100.0f, -100.0f}) {
++        float rpm = initial;
++        for (int i = 0; i < 1000; ++i) rpm = motion_safety::FilterWheelRpm(0, rpm);
++        assert(rpm == 0.0f && !std::signbit(rpm));
++        float wheels[2] = {rpm * leap_config::motion::kRpmToMmS, rpm};
++        float vx, vy, wz;
++        DifferentialKinematics{}.Forward(wheels, &vx, &vy, &wz);
++        assert(static_cast<double>(vx) / 1000.0 == 0.0 && wz == 0.0f);
++    }
++    // A real encoder input, even below the tail threshold, must never be discarded.
++    const float small = leap_config::motion::kVelocityZeroThresholdRpm / 2;
++    assert(motion_safety::FilterWheelRpm(small, 0) > 0);
++    assert(motion_safety::FilterWheelRpm(0, 1.0f) > 0.6f);
++    assert(motion_safety::FilterWheelRpm(0, std::numeric_limits<float>::denorm_min()) == 0);
++    // Exercise actual kinematics and numeric float-to-ROS-double conversion at a useful speed.
++    float wheels[2], vx, vy, wz;
++    DifferentialKinematics kinematics;
++    kinematics.Inverse(250, 0, 0.7f, wheels);
++    kinematics.Forward(wheels, &vx, &vy, &wz);
++    assert(std::fabs(static_cast<double>(vx) / 1000.0 - 0.25) < 1e-6);
++    assert(std::fabs(static_cast<double>(wz) - 0.7) < 1e-6);
++}
++}  // namespace
++
++int main() {
++    TestInputsAndUnits();
++    TestLeaseAndHandover();
++    TestUptimeWrap();
++    TestWheelFilterAndRosConversion();
++    std::cout << "motion safety: input conversion, lease, handover, wrap, zero tail passed\n";
++}
+diff --git a/tests/motion_stubs/board.h b/tests/motion_stubs/board.h
+new file mode 100644
+index 00000000..4982350b
+--- /dev/null
++++ b/tests/motion_stubs/board.h
+@@ -0,0 +1,28 @@
++#pragma once
++
++#include "system_globals.h"
++#include <vector>
++
++enum MotorID { kLeft, kRight };
++struct DriveCall { uint32_t now_ms; float vx; float vy; float wz; };
++struct StubRobot {
++    std::vector<DriveCall> drives;
++    std::vector<uint32_t> stops;
++    void Drive(float vx, float vy, float wz) { drives.push_back({stub_now_ms, vx, vy, wz}); }
++    void Stop() { stops.push_back(stub_now_ms); }
++    void MoveToPosition(float, float, float) {}
++    void MoveRelative(float, float) {}
++    void SetMotorTargetVelocity(MotorID, float) {}
++    void SetAllMotorTargetsVelocity(float, float) {}
++    void SetVelocityPidGains(float, float, float) {}
++    void SetPositionPidGains(float, float, float) {}
++    void Update(float, float) {}
++    bool IsBusy() const { return false; }
++    void GetVelocity(float* vx, float* vy, float* wz) const { *vx = *vy = *wz = 0; }
++    void GetOdometry(float* x, float* y, float* yaw) const { *x = *y = *yaw = 0; }
++    void GetOdometryQuaternion(float* w, float* x, float* y, float* z) const {
++        *w = 1; *x = *y = *z = 0;
++    }
++    void GetAllMotorVelocities(float* left, float* right) const { *left = *right = 0; }
++};
++extern StubRobot robot;
+diff --git a/tests/motion_stubs/system_globals.h b/tests/motion_stubs/system_globals.h
+new file mode 100644
+index 00000000..f59fecfd
+--- /dev/null
++++ b/tests/motion_stubs/system_globals.h
+@@ -0,0 +1,65 @@
++#pragma once
++
++#include "msg/motion_msg.h"
++#include "msg/pid_msg.h"
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++#include <functional>
++
++static constexpr int pdTRUE = 1;
++static constexpr int pdFALSE = 0;
++static constexpr int pdPASS = 1;
++static constexpr uint32_t portTICK_PERIOD_MS = 1;
++#define pdMS_TO_TICKS(ms) (ms)
++
++struct StubQueue {
++    std::array<unsigned char, 512> data = {};
++    std::size_t size = 0;
++    bool available = false;
++};
++
++struct SystemGlobals {
++    struct Queues {
++        StubQueue* imu_state = nullptr;
++        StubQueue* motion_cmd = nullptr;
++        StubQueue* gamepad_motion_cmd = nullptr;
++        StubQueue* speedpid_cmd = nullptr;
++        StubQueue* positionpid_cmd = nullptr;
++        StubQueue* motion_state = nullptr;
++    } queues;
++    struct Flags {
++        bool gamepad_override_active = false;
++        bool emergency_stop = false;
++        bool motion_busy = false;
++    } flags;
++    struct Control { PidMsg speed_pid; PidMsg position_pid; } control;
++};
++
++extern SystemGlobals stub_globals;
++extern uint32_t stub_now_ms;
++extern std::function<void()> stub_after_delay;
++inline SystemGlobals& system_globals() { return stub_globals; }
++inline uint32_t xTaskGetTickCount() { return stub_now_ms; }
++
++inline int xQueuePeek(StubQueue* queue, void* output, int) {
++    if (queue == nullptr || !queue->available) return pdFALSE;
++    std::memcpy(output, queue->data.data(), queue->size);
++    return pdTRUE;
++}
++inline int xQueueReceive(StubQueue* queue, void* output, int timeout) {
++    const int result = xQueuePeek(queue, output, timeout);
++    if (result == pdTRUE) queue->available = false;
++    return result;
++}
++inline int xQueueOverwrite(StubQueue* queue, const void* input) {
++    std::memcpy(queue->data.data(), input, queue->size);
++    queue->available = true;
++    return pdPASS;
++}
++inline void vTaskDelay(uint32_t duration_ms) {
++    stub_now_ms += duration_ms;
++    stub_after_delay();
++}
+diff --git a/tests/motion_task_watchdog_test.cpp b/tests/motion_task_watchdog_test.cpp
+new file mode 100644
+index 00000000..694090dc
+--- /dev/null
++++ b/tests/motion_task_watchdog_test.cpp
+@@ -0,0 +1,129 @@
++#include "board.h"
++#include "motion_safety.h"
++
++#include <algorithm>
++#include <cassert>
++#include <iostream>
++#include <utility>
++#include <vector>
++
++void motion_task(void*);
++SystemGlobals stub_globals;
++uint32_t stub_now_ms = 0;
++std::function<void()> stub_after_delay;
++StubRobot robot;
++
++namespace {
++struct EndSimulation {};
++StubQueue nav_queue, gamepad_queue, state_queue;
++std::vector<std::pair<uint32_t, MotionMsg>> statuses;
++
++void Enqueue(const MotionMsg& command) { xQueueOverwrite(&nav_queue, &command); }
++MotionMsg Velocity(uint32_t now, uint32_t sequence = 1) {
++    MotionMsg command;
++    assert(motion_safety::MakeMicroRosVelocity(0.25, 0, 0.7, now, sequence, &command));
++    return command;
++}
++
++void Reset() {
++    stub_globals = {};
++    stub_now_ms = 100;
++    robot = {};
++    statuses.clear();
++    nav_queue = {}; nav_queue.size = sizeof(MotionMsg);
++    gamepad_queue = {}; gamepad_queue.size = sizeof(MotionMsg);
++    state_queue = {}; state_queue.size = sizeof(MotionMsg);
++    stub_globals.queues.motion_cmd = &nav_queue;
++    stub_globals.queues.gamepad_motion_cmd = &gamepad_queue;
++    stub_globals.queues.motion_state = &state_queue;
++}
++
++void RunUntil(uint32_t until, const std::function<void()>& schedule = [] {}) {
++    stub_after_delay = [=] {
++        MotionMsg status;
++        assert(xQueuePeek(&state_queue, &status, 0) == pdTRUE);
++        statuses.push_back({stub_now_ms - 20, status});
++        if (stub_now_ms >= until) throw EndSimulation{};
++        schedule();
++    };
++    try { motion_task(nullptr); }
++    catch (const EndSimulation&) {}
++}
++
++void TestTimeoutStopsRealTaskAndFixesTelemetry() {
++    Reset(); Enqueue(Velocity(100)); RunUntil(740);
++    assert(robot.drives.size() == 1 && robot.drives.front().vx == 250);
++    assert(!robot.stops.empty() && robot.stops.front() == 600);
++    assert(statuses.front().second.target_wz == 0.7f);
++    for (const auto& row : statuses) {
++        if (row.first >= 600) {
++            assert(row.second.target_vx == 0 && row.second.target_wz == 0);
++            assert(row.second.cmd_vel_has_command && row.second.cmd_vel_timed_out);
++            assert(row.second.cmd_vel_received_sequence == 1);
++            assert(row.second.cmd_vel_applied_sequence == 1);
++        }
++    }
++}
++
++void TestRepeatedCommandRenewsFromReceiptTime() {
++    Reset(); Enqueue(Velocity(100));
++    RunUntil(1140, [] { if (stub_now_ms == 580) Enqueue(Velocity(580, 2)); });
++    assert(robot.drives.size() == 2 && robot.drives.back().now_ms == 580);
++    assert(robot.stops.front() == 1080);
++    assert(statuses.back().second.cmd_vel_applied_sequence == 2);
++}
++
++void TestGamepadHandoverCannotReviveExpiredNavigation() {
++    Reset(); Enqueue(Velocity(100));
++    MotionMsg gamepad; gamepad.source = MOTION_SRC_GAMEPAD; gamepad.target_vx = 100;
++    xQueueOverwrite(&gamepad_queue, &gamepad);
++    RunUntil(900, [] {
++        if (stub_now_ms == 200) stub_globals.flags.gamepad_override_active = true;
++        if (stub_now_ms == 820) stub_globals.flags.gamepad_override_active = false;
++    });
++    assert(robot.stops.front() == 820);
++    assert(std::any_of(robot.drives.begin(), robot.drives.end(), [](const DriveCall& call) {
++        return call.now_ms == 800 && call.vx == 100;
++    }));
++    assert(std::none_of(robot.drives.begin(), robot.drives.end(), [](const DriveCall& call) {
++        return call.now_ms >= 820;
++    }));
++}
++
++void TestFreshNavigationAfterGamepadAndOtherSources() {
++    Reset(); Enqueue(Velocity(100));
++    MotionMsg gamepad; gamepad.source = MOTION_SRC_GAMEPAD; gamepad.target_vx = 100;
++    xQueueOverwrite(&gamepad_queue, &gamepad);
++    RunUntil(1320, [] {
++        if (stub_now_ms == 200) stub_globals.flags.gamepad_override_active = true;
++        if (stub_now_ms == 780) Enqueue(Velocity(780, 2));
++        if (stub_now_ms == 820) stub_globals.flags.gamepad_override_active = false;
++    });
++    assert(robot.stops.front() == 1280);
++    assert(std::any_of(robot.drives.begin(), robot.drives.end(), [](const DriveCall& call) {
++        return call.now_ms == 820 && call.vx == 250;
++    }));
++    Reset();
++    auto mavlink = Velocity(100); mavlink.source = MOTION_SRC_UDP;
++    Enqueue(mavlink); RunUntil(900);
++    assert(robot.drives.size() == 1 && robot.stops.empty());
++    assert(!statuses.back().second.cmd_vel_has_command);
++}
++
++void TestMissingReceiptMetadataFailsClosed() {
++    Reset();
++    auto command = Velocity(100); command.cmd_vel_has_command = false;
++    Enqueue(command); RunUntil(180);
++    assert(robot.drives.empty() && robot.stops.front() == 100);
++    assert(statuses.back().second.target_vx == 0);
++}
++}  // namespace
++
++int main() {
++    TestTimeoutStopsRealTaskAndFixesTelemetry();
++    TestRepeatedCommandRenewsFromReceiptTime();
++    TestGamepadHandoverCannotReviveExpiredNavigation();
++    TestFreshNavigationAfterGamepadAndOtherSources();
++    TestMissingReceiptMetadataFailsClosed();
++    std::cout << "real motion_task watchdog simulations passed\n";
++}
+diff --git a/tests/runtime_tuning_test.cpp b/tests/runtime_tuning_test.cpp
+new file mode 100644
+index 00000000..81064142
+--- /dev/null
++++ b/tests/runtime_tuning_test.cpp
+@@ -0,0 +1,64 @@
++#include "runtime_tuning_store.h"
++#include "nvs.h"
++#include <cassert>
++#include <cmath>
++#include <cstring>
++#include <limits>
++#include <vector>
++
++static std::vector<unsigned char> committed, pending;
++static int open_error=ESP_OK, set_error=ESP_OK, commit_error=ESP_OK;
++static unsigned writes=0, commits=0;
++esp_err_t nvs_open(const char *ns, int, nvs_handle_t *handle) { assert(strcmp(ns,"experiment_cfg")==0);*handle=1;return open_error; }
++esp_err_t nvs_get_blob(nvs_handle_t, const char *key, void *value, size_t *size) {
++    assert(strcmp(key,"tuning_v1")==0);
++    if(committed.empty())return ESP_ERR_NVS_NOT_FOUND;
++    if(*size<committed.size())return ESP_ERR_INVALID_SIZE;
++    *size=committed.size();memcpy(value,committed.data(),*size);return ESP_OK;
++}
++esp_err_t nvs_set_blob(nvs_handle_t, const char *key, const void *value, size_t size) {
++    assert(strcmp(key,"tuning_v1")==0);++writes;
++    if(set_error)return set_error;
++    pending.assign(static_cast<const unsigned char *>(value),static_cast<const unsigned char *>(value)+size);
++    return ESP_OK;
++}
++esp_err_t nvs_commit(nvs_handle_t) { ++commits;if(commit_error)return commit_error;committed=pending;return ESP_OK; }
++void nvs_close(nvs_handle_t) { pending.clear(); }
++
++int main() {
++    assert(runtime_tuning_init()==ESP_ERR_NVS_NOT_FOUND);
++    RuntimeTuning defaults=runtime_tuning_get();assert(defaults.telemetry_hz==50&&defaults.slow_telemetry_hz==10&&defaults.gyro_scale_z==1);
++    RuntimeTuning wanted=defaults;wanted.telemetry_hz=7;wanted.slow_telemetry_hz=3;wanted.gyro_scale_z=1.25f;
++    assert(runtime_tuning_save(wanted)==ESP_OK);
++    assert(runtime_tuning_get().gyro_scale_z==1.25f&&writes==1&&commits==1);
++    assert(runtime_tuning_init()==ESP_OK&&runtime_tuning_get().telemetry_hz==7);
++    for(int which=0;which<3;++which) {
++        RuntimeTuning next=wanted;next.gyro_scale_z=1.5f;
++        open_error=which==0?ESP_FAIL:ESP_OK;set_error=which==1?ESP_FAIL:ESP_OK;commit_error=which==2?ESP_FAIL:ESP_OK;
++        assert(runtime_tuning_save(next)!=ESP_OK);
++        assert(runtime_tuning_get().gyro_scale_z==1.25f);
++    }
++    open_error=set_error=commit_error=ESP_OK;
++    const unsigned before=writes;
++    for(float invalid:{0.0f,-1.0f,0.49f,2.01f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
++        RuntimeTuning next=wanted;next.gyro_scale_x=invalid;assert(runtime_tuning_save(next)==ESP_ERR_INVALID_ARG);
++    }
++    for(unsigned invalid:{0u,51u,100000u}){RuntimeTuning next=wanted;next.telemetry_hz=invalid;assert(runtime_tuning_save(next)==ESP_ERR_INVALID_ARG);}
++    assert(writes==before);
++    // Corrupt/newer data uses defaults and preserves the original record.
++    RuntimeTuning newer=wanted;newer.schema_version=2;
++    committed.assign(reinterpret_cast<unsigned char *>(&newer),reinterpret_cast<unsigned char *>(&newer)+sizeof(newer));
++    assert(runtime_tuning_init()==ESP_ERR_INVALID_ARG&&runtime_tuning_get().gyro_scale_z==1);
++    assert(committed.size()==sizeof(newer));
++    committed.resize(5);assert(runtime_tuning_init()==ESP_ERR_INVALID_SIZE&&committed.size()==5);
++    // Rates that do not divide 50 Hz retain the requested average without bursts.
++    for(unsigned hz:{1u,3u,7u,10u,49u,50u}){
++        TelemetryGate gate;unsigned count=0;
++        for(int64_t us=0;us<10000000;us+=20000)count+=gate.due(us,hz);
++        assert(std::abs(static_cast<int>(count)-static_cast<int>(hz*10))<=1);
++    }
++    TelemetryGate gate;assert(gate.due(0,5));assert(!gate.due(0,5));assert(!gate.due(199999,5));assert(gate.due(200000,5));
++    assert(gate.due(10000000,5));assert(!gate.due(10000000,5));assert(!gate.due(10000001,5));
++    assert(gate.due(10020000,10));assert(!gate.due(10020000,10));
++    assert(!gate.due(10030000,0));
++}
+diff --git a/tests/tuning_http_test.cpp b/tests/tuning_http_test.cpp
+new file mode 100644
+index 00000000..5daa1f8f
+--- /dev/null
++++ b/tests/tuning_http_test.cpp
+@@ -0,0 +1,49 @@
++#include "runtime_tuning_http.h"
++#include "runtime_tuning_store.h"
++#include <algorithm>
++#include <cassert>
++#include <cstring>
++#include <string>
++#include <vector>
++static RuntimeTuning current;
++static unsigned saves=0,restarts=0,wifi_saves=0;
++static bool save_failed=false;
++static std::vector<httpd_uri_t> routes;
++static std::string input,output;
++static size_t offset=0,chunk=3;
++static int status=200;
++RuntimeTuning runtime_tuning_get(){return current;}
++esp_err_t runtime_tuning_save(const RuntimeTuning &value){++saves;if(save_failed)return ESP_FAIL;current=value;return ESP_OK;}
++esp_err_t httpd_resp_send_err(httpd_req_t*,int code,const char *text){status=code;output=text;return ESP_OK;}
++esp_err_t httpd_resp_set_type(httpd_req_t*,const char*){return ESP_OK;}
++esp_err_t httpd_resp_set_hdr(httpd_req_t*,const char*,const char*){return ESP_OK;}
++esp_err_t httpd_resp_sendstr(httpd_req_t*,const char *text){output=text;return ESP_OK;}
++int httpd_req_recv(httpd_req_t*,char *dest,size_t size){size_t n=std::min({size,input.size()-offset,chunk});memcpy(dest,input.data()+offset,n);offset+=n;return n;}
++esp_err_t httpd_register_uri_handler(httpd_handle_t,const httpd_uri_t *route){routes.push_back(*route);return ESP_OK;}
++esp_err_t wifi_load_sta_credentials_or_default(char *ssid,size_t,char *password,size_t){strcpy(ssid,"test-network");strcpy(password,"do-not-expose");return ESP_OK;}
++esp_err_t wifi_save_sta_credentials(const char *ssid,const char *password){++wifi_saves;return strlen(ssid)>0&&strlen(ssid)<=32&&(strlen(password)==0||(strlen(password)>=8&&strlen(password)<=63))?ESP_OK:ESP_ERR_INVALID_ARG;}
++esp_err_t esp_wifi_get_ps(int *ps){*ps=0;return ESP_OK;}
++void app_runtime_restart_after_delay_ms(uint32_t ms){assert(ms==1200);++restarts;}
++static void request(const char *path,int method,std::string body=""){
++ input=body;offset=0;status=200;output.clear();httpd_req_t req{body.size()};
++ for(const auto&r:routes)if(strcmp(path,r.uri)==0&&method==r.method){r.handler(&req);return;}
++ assert(false);
++}
++int main(){
++ register_runtime_tuning_http(nullptr);assert(routes.size()==5);
++ request("/api/tuning",HTTP_POST,R"({"telemetry_hz":7,"gyro_scale_z":1.25})");
++ assert(status==200&&saves==1&&current.telemetry_hz==7&&current.gyro_scale_z==1.25f&&current.gyro_scale_x==1);
++ assert(output.find("\"restart\":false")!=std::string::npos);
++ const unsigned old=saves;
++ for(const char *bad:{"{}","[]",R"({"telemetry_hz":1,"telemetry_hz":50})",R"({"telemetry_hz":true})",R"({"telemetry_hz":1.5})",R"({"telemetry_hz":51})",R"({"telemetry_hz":0})",R"({"slow_telemetry_hz":11})",R"({"gyro_scale_z":0.499999999999})",R"({"gyro_scale_x":2.0000000001})",R"({"gyro_scale_x":1e100})",R"({"unused":2})",R"({"telemetry_hz\u0000bad":20})",R"({"telemetry_hz":20} garbage)"}){
++  request("/api/tuning",HTTP_POST,bad);assert(status==400&&saves==old);
++ }
++ request("/api/tuning",HTTP_POST,std::string(513,' '));assert(status==400&&saves==old);
++ save_failed=true;request("/api/tuning",HTTP_POST,R"({"telemetry_hz":10})");assert(status==500&&current.telemetry_hz==7);save_failed=false;
++ request("/api/tuning",HTTP_GET);assert(status==200&&output.find("2026.11.16-runtime1")!=std::string::npos);
++ request("/api/wifi",HTTP_GET);assert(status==200&&output.find("test-network")!=std::string::npos&&output.find("do-not-expose")==std::string::npos);
++ request("/api/wifi",HTTP_POST,R"({"ssid":"target","password":"newpassword"})");assert(status==200&&restarts==1&&wifi_saves==1);
++ request("/api/wifi",HTTP_POST,R"({"ssid":"target"})");assert(status==400&&restarts==1&&wifi_saves==1);
++ request("/api/wifi",HTTP_POST,R"({"ssid":"target","password":"short"})");assert(status==400&&restarts==1);
++ request("/tuning",HTTP_GET);assert(status==200&&output.find("/api/tuning")!=std::string::npos);
++}
+diff --git a/tests/tuning_stubs/esp_err.h b/tests/tuning_stubs/esp_err.h
+new file mode 100644
+index 00000000..8b9a56df
+--- /dev/null
++++ b/tests/tuning_stubs/esp_err.h
+@@ -0,0 +1,5 @@
++#pragma once
++using esp_err_t = int;
++constexpr int ESP_OK=0, ESP_FAIL=-1, ESP_ERR_NO_MEM=1, ESP_ERR_INVALID_ARG=2,
++ ESP_ERR_INVALID_STATE=3, ESP_ERR_INVALID_SIZE=4, ESP_ERR_TIMEOUT=5,
++ ESP_ERR_NVS_NOT_FOUND=6;
+diff --git a/tests/tuning_stubs/freertos/FreeRTOS.h b/tests/tuning_stubs/freertos/FreeRTOS.h
+new file mode 100644
+index 00000000..0983f189
+--- /dev/null
++++ b/tests/tuning_stubs/freertos/FreeRTOS.h
+@@ -0,0 +1,8 @@
++#pragma once
++#include <cstdint>
++using portMUX_TYPE = int;
++#define portMUX_INITIALIZER_UNLOCKED 0
++#define portENTER_CRITICAL(lock) (void)(lock)
++#define portEXIT_CRITICAL(lock) (void)(lock)
++#define pdMS_TO_TICKS(value) (value)
++#define pdTRUE 1
+diff --git a/tests/tuning_stubs/freertos/semphr.h b/tests/tuning_stubs/freertos/semphr.h
+new file mode 100644
+index 00000000..334b5570
+--- /dev/null
++++ b/tests/tuning_stubs/freertos/semphr.h
+@@ -0,0 +1,5 @@
++#pragma once
++using SemaphoreHandle_t = void *;
++inline SemaphoreHandle_t xSemaphoreCreateMutex() { return reinterpret_cast<void *>(1); }
++inline int xSemaphoreTake(SemaphoreHandle_t, int) { return 1; }
++inline void xSemaphoreGive(SemaphoreHandle_t) {}
+diff --git a/tests/tuning_stubs/nvs.h b/tests/tuning_stubs/nvs.h
+new file mode 100644
+index 00000000..1b4d5532
+--- /dev/null
++++ b/tests/tuning_stubs/nvs.h
+@@ -0,0 +1,10 @@
++#pragma once
++#include <cstddef>
++#include "esp_err.h"
++using nvs_handle_t = int;
++constexpr int NVS_READONLY=0, NVS_READWRITE=1;
++esp_err_t nvs_open(const char *, int, nvs_handle_t *);
++esp_err_t nvs_get_blob(nvs_handle_t, const char *, void *, size_t *);
++esp_err_t nvs_set_blob(nvs_handle_t, const char *, const void *, size_t);
++esp_err_t nvs_commit(nvs_handle_t);
++void nvs_close(nvs_handle_t);

@@ -1,0 +1,11 @@
+{
+  "names": {
+    "micro_ros_agent": {
+      "cmake-args": [
+        "-DMICROROSAGENT_SUPERBUILD=OFF",
+        "-Dmicroxrcedds_agent_DIR=/home/ros-car/leap-ros/vendor/install/share/microxrcedds_agent/cmake",
+        "-DCMAKE_INSTALL_RPATH=/home/ros-car/leap-ros/vendor/install/lib"
+      ]
+    }
+  }
+}

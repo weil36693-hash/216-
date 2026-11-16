@@ -1,0 +1,492 @@
+diff --git a/README.md b/README.md
+index e304ee9..d99bd8b 100644
+--- a/README.md
++++ b/README.md
+@@ -30,3 +30,21 @@ ESP32-S3 图传相机工程，支持配网页面、MJPEG 视频流、UDP 发现
+ - `partitions.csv`：分区表
+ - `sdkconfig`：当前配置
+ 
++## 本地修改：相机源端约 5 FPS
++
++`main/Kconfig.projbuild` 的 `CONFIG_CAMERA_STREAM_FPS` 默认值为 5，
++可在 `idf.py menuconfig` 的 `Camera streaming` 中修改，范围 1～30。
++限频发生在相机 HTTP 视频发送之前，默认相邻帧发送起点至少间隔 200 ms。
++慢客户端会使实际帧率更低，恢复后不集中补发过期帧。
++
++等待期间不持有帧缓冲；保留现有双缓冲和 `CAMERA_GRAB_LATEST`。
++传感器仍可持续高速采集，网络上只输出被选中的帧。因此这是相机端图传限频，
++不声称把传感器曝光频率也设置为 5 Hz。VGA、JPEG 质量、Wi-Fi 和 I2C 协议保持原配置。
++HTTP 视频响应头 `X-Camera-Stream-FPS: 5` 与串口日志用于识别该限频版本；
++实际带宽和帧率仍需刷入后测量。
++
++本机编译使用 ESP-IDF 5.5.3，构建脚本及交付记录位于：
++`/home/ros-car/leap-ros/log/camera_firmware_5fps_build/`。
++正式写入前应核对相机 USB 身份、原机分区与活动应用槽，并备份原机 Flash。
++构建目录自动生成的 `merged-binary.bin` 不作为保留原机 NVS 的升级包使用。
++
+diff --git a/main/CMakeLists.txt b/main/CMakeLists.txt
+index c2d04aa..6ad6c76 100644
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -15,6 +15,7 @@ idf_component_register(
+         esp_event
+         esp_netif
+         esp_http_server
++        esp_timer
+         nvs_flash
+         esp_psram
+         esp_driver_i2c
+diff --git a/main/web_mjpeg.c b/main/web_mjpeg.c
+index c8fd82c..eaee1e3 100644
+--- a/main/web_mjpeg.c
++++ b/main/web_mjpeg.c
+@@ -5,10 +5,28 @@
+ #include "esp_camera.h"
+ #include "esp_err.h"
+ #include "esp_log.h"
++#include "esp_timer.h"
++#include "freertos/FreeRTOS.h"
++#include "freertos/task.h"
++#include "sdkconfig.h"
+ 
+ static const char *TAG = "WEB_MJPEG";
+ 
+ #define STREAM_BOUNDARY "frame"
++#define STREAM_FRAME_PERIOD_US ((1000000LL + CONFIG_CAMERA_STREAM_FPS - 1) / CONFIG_CAMERA_STREAM_FPS)
++#define STREAM_STRINGIFY_INNER(value) #value
++#define STREAM_STRINGIFY(value) STREAM_STRINGIFY_INNER(value)
++
++static void wait_for_frame_deadline(int64_t deadline_us)
++{
++    int64_t remaining_us;
++    while ((remaining_us = deadline_us - esp_timer_get_time()) > 0) {
++        // Round up, then recheck after waking: a tick boundary can wake a
++        // FreeRTOS delay before the requested wall-clock interval has elapsed.
++        TickType_t ticks = (TickType_t)((remaining_us * configTICK_RATE_HZ + 999999) / 1000000);
++        vTaskDelay(ticks > 0 ? ticks : 1);
++    }
++}
+ 
+ static const char *STREAM_CONTENT_TYPE =
+     "multipart/x-mixed-replace;boundary=" STREAM_BOUNDARY;
+@@ -28,10 +46,15 @@ static esp_err_t stream_handler(httpd_req_t *req)
+ 
+     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
++    httpd_resp_set_hdr(req, "X-Camera-Stream-FPS", STREAM_STRINGIFY(CONFIG_CAMERA_STREAM_FPS));
+ 
+-    ESP_LOGI(TAG, "MJPEG client connected");
++    ESP_LOGI(TAG, "MJPEG client connected, source stream limited to %d FPS", CONFIG_CAMERA_STREAM_FPS);
+ 
++    int64_t next_frame_us = 0;
+     while (true) {
++        // Wait before taking a frame: GRAB_LATEST keeps refreshing the driver's
++        // queue during this idle period, with no frame buffer held by us.
++        wait_for_frame_deadline(next_frame_us);
+         camera_fb_t *fb = esp_camera_fb_get();
+ 
+         if (!fb) {
+@@ -47,6 +70,9 @@ static esp_err_t stream_handler(httpd_req_t *req)
+             return ESP_FAIL;
+         }
+ 
++        // Use the actual send start rather than an old deadline, so slow
++        // captures/clients never cause catch-up bursts of queued frames.
++        next_frame_us = esp_timer_get_time() + STREAM_FRAME_PERIOD_US;
+         res = httpd_resp_send_chunk(req, STREAM_BOUNDARY_LINE, strlen(STREAM_BOUNDARY_LINE));
+         if (res != ESP_OK) {
+             esp_camera_fb_return(fb);
+diff --git a/sdkconfig b/sdkconfig
+index b5049af..e52da0c 100644
+--- a/sdkconfig
++++ b/sdkconfig
+@@ -595,6 +595,12 @@ CONFIG_PARTITION_TABLE_OFFSET=0x8000
+ CONFIG_PARTITION_TABLE_MD5=y
+ # end of Partition Table
+ 
++#
++# Camera streaming
++#
++CONFIG_CAMERA_STREAM_FPS=5
++# end of Camera streaming
++
+ #
+ # Compiler options
+ #
+diff --git a/main/Kconfig.projbuild b/main/Kconfig.projbuild
+new file mode 100644
+index 0000000..e5db887
+--- /dev/null
++++ b/main/Kconfig.projbuild
+@@ -0,0 +1,12 @@
++menu "Camera streaming"
++
++    config CAMERA_STREAM_FPS
++        int "Maximum MJPEG source stream frames per second"
++        range 1 30
++        default 5
++        help
++            Limit frames sent by the camera's HTTP server, before Wi-Fi
++            transmission. The sensor may continue capturing faster;
++            the existing GRAB_LATEST mode discards superseded frames.
++
++endmenu
+diff --git a/tests/README.txt b/tests/README.txt
+new file mode 100644
+index 0000000..f6b30f0
+--- /dev/null
++++ b/tests/README.txt
+@@ -0,0 +1,12 @@
++MJPEG source stream host regression tests
++
++Run: bash tests/run_stream_tests.sh
++
++The C test includes the actual main/web_mjpeg.c, registers its real HTTP
++handler, and drives it with deterministic camera/HTTP/FreeRTOS stubs.
++It checks 5 FPS send cadence, send/capture delays, early tick wakeups,
++buffer ownership during waits, and all HTTP send error branches.
++
++These tests do not exercise ESP32 hardware, radio throughput, sensor capture
++freshness, USB flashing, or actual wall-clock FPS. Firmware build and
++on-device stream measurements remain separate checks.
+diff --git a/tests/run_stream_tests.sh b/tests/run_stream_tests.sh
+new file mode 100644
+index 0000000..d1fc0e0
+--- /dev/null
++++ b/tests/run_stream_tests.sh
+@@ -0,0 +1,9 @@
++#!/usr/bin/env bash
++set -euo pipefail
++test_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
++test_build_dir="$(mktemp -d /tmp/maturo-stream-test.XXXXXX)"
++trap 'rm -rf -- "$test_build_dir"' EXIT
++"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -pedantic \
++    -I "$test_dir/stubs" "$test_dir/test_mjpeg_stream.c" \
++    -o "$test_build_dir/test_mjpeg_stream"
++"$test_build_dir/test_mjpeg_stream"
+diff --git a/tests/stubs/esp_camera.h b/tests/stubs/esp_camera.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/esp_camera.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/esp_err.h b/tests/stubs/esp_err.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/esp_err.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/esp_http_server.h b/tests/stubs/esp_http_server.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/esp_http_server.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/esp_log.h b/tests/stubs/esp_log.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/esp_log.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/esp_timer.h b/tests/stubs/esp_timer.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/esp_timer.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/freertos/FreeRTOS.h b/tests/stubs/freertos/FreeRTOS.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/freertos/FreeRTOS.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/freertos/task.h b/tests/stubs/freertos/task.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/freertos/task.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/sdkconfig.h b/tests/stubs/sdkconfig.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/sdkconfig.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/test_esp.h b/tests/stubs/test_esp.h
+new file mode 100644
+index 0000000..b94948c
+--- /dev/null
++++ b/tests/stubs/test_esp.h
+@@ -0,0 +1,51 @@
++#pragma once
++
++#include <assert.h>
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++typedef int esp_err_t;
++#define ESP_OK 0
++#define ESP_FAIL (-1)
++#define ESP_ERROR_CHECK(value) assert((value) == ESP_OK)
++#define ESP_LOGI(tag, ...) ((void)(tag))
++#define ESP_LOGE(tag, ...) ((void)(tag))
++#define ESP_LOGW(tag, ...) ((void)(tag))
++
++typedef uint32_t TickType_t;
++#define configTICK_RATE_HZ 100
++#define CONFIG_CAMERA_STREAM_FPS 5
++void vTaskDelay(TickType_t ticks);
++int64_t esp_timer_get_time(void);
++
++#define PIXFORMAT_JPEG 4
++typedef struct {
++    uint8_t *buf;
++    size_t len;
++    int format;
++} camera_fb_t;
++camera_fb_t *esp_camera_fb_get(void);
++void esp_camera_fb_return(camera_fb_t *fb);
++
++typedef struct { int unused; } httpd_req_t;
++typedef void *httpd_handle_t;
++typedef struct {
++    unsigned server_port;
++    unsigned ctrl_port;
++    unsigned max_uri_handlers;
++    unsigned stack_size;
++} httpd_config_t;
++#define HTTPD_DEFAULT_CONFIG() ((httpd_config_t){0})
++#define HTTP_GET 0
++typedef struct {
++    const char *uri;
++    int method;
++    esp_err_t (*handler)(httpd_req_t *);
++    void *user_ctx;
++} httpd_uri_t;
++esp_err_t httpd_resp_set_type(httpd_req_t *req, const char *type);
++esp_err_t httpd_resp_set_hdr(httpd_req_t *req, const char *name, const char *value);
++esp_err_t httpd_resp_send_chunk(httpd_req_t *req, const char *data, size_t len);
++esp_err_t httpd_start(httpd_handle_t *server, const httpd_config_t *config);
++esp_err_t httpd_register_uri_handler(httpd_handle_t server, const httpd_uri_t *uri);
+diff --git a/tests/test_mjpeg_stream.c b/tests/test_mjpeg_stream.c
+new file mode 100644
+index 0000000..c5f0bea
+--- /dev/null
++++ b/tests/test_mjpeg_stream.c
+@@ -0,0 +1,207 @@
++// Compile the production handler itself against deterministic hardware stubs.
++#include <stdio.h>
++#include <string.h>
++#include "test_esp.h"
++#include "../main/web_mjpeg.c"
++
++enum { MAX_FRAMES = 32 };
++static struct {
++    int64_t now_us;
++    int64_t starts[MAX_FRAMES];
++    int64_t capture_delay[MAX_FRAMES];
++    int64_t payload_delay[MAX_FRAMES];
++    int captures, returns, boundaries, completed, delays;
++    int max_completed, phase, fail_phase, fail_capture;
++    bool held, early_wake, type_failure, fps_header;
++    uint8_t jpeg[4];
++    camera_fb_t fb;
++    esp_err_t (*handler)(httpd_req_t *);
++} fake;
++
++static void reset_fake(void)
++{
++    memset(&fake, 0, sizeof(fake));
++    fake.now_us = 1000000;
++    fake.max_completed = 4;
++    fake.fail_phase = -1;
++    fake.fail_capture = -1;
++    fake.jpeg[0] = 0xff;
++    fake.jpeg[1] = 0xd8;
++    fake.jpeg[2] = 0xff;
++    fake.jpeg[3] = 0xd9;
++    fake.fb = (camera_fb_t){fake.jpeg, sizeof(fake.jpeg), PIXFORMAT_JPEG};
++}
++
++int64_t esp_timer_get_time(void) { return fake.now_us; }
++
++void vTaskDelay(TickType_t ticks)
++{
++    // Holding a framebuffer while sleeping would starve the camera queue.
++    assert(!fake.held);
++    assert(ticks > 0);
++    ++fake.delays;
++    int64_t elapsed = (int64_t)ticks * 10000;
++    if (fake.early_wake && fake.delays == 1) elapsed -= 5000;
++    assert(elapsed > 0);
++    fake.now_us += elapsed;
++}
++
++camera_fb_t *esp_camera_fb_get(void)
++{
++    assert(!fake.held);
++    assert(fake.captures < MAX_FRAMES);
++    int index = fake.captures++;
++    fake.now_us += fake.capture_delay[index];
++    if (index == fake.fail_capture) return NULL;
++    fake.held = true;
++    return &fake.fb;
++}
++
++void esp_camera_fb_return(camera_fb_t *fb)
++{
++    assert(fb == &fake.fb);
++    assert(fake.held);
++    fake.held = false;
++    ++fake.returns;
++}
++
++esp_err_t httpd_resp_set_type(httpd_req_t *req, const char *type)
++{
++    (void)req;
++    assert(strcmp(type, "multipart/x-mixed-replace;boundary=frame") == 0);
++    return fake.type_failure ? ESP_FAIL : ESP_OK;
++}
++
++esp_err_t httpd_resp_set_hdr(httpd_req_t *req, const char *name, const char *value)
++{
++    (void)req;
++    if (strcmp(name, "X-Camera-Stream-FPS") == 0) {
++        assert(strcmp(value, "5") == 0);
++        fake.fps_header = true;
++    }
++    return ESP_OK;
++}
++
++esp_err_t httpd_resp_send_chunk(httpd_req_t *req, const char *data, size_t len)
++{
++    (void)req;
++    assert(fake.held);
++    if (fake.phase == 0) {
++        assert(len == strlen("\r\n--frame\r\n"));
++        assert(memcmp(data, "\r\n--frame\r\n", len) == 0);
++        assert(fake.boundaries < MAX_FRAMES);
++        fake.starts[fake.boundaries++] = fake.now_us;
++        // A deterministic client disconnect terminates the production loop.
++        if (fake.completed >= fake.max_completed) return ESP_FAIL;
++    } else if (fake.phase == 1) {
++        assert(len == strlen("Content-Type: image/jpeg\r\n\r\n"));
++        assert(memcmp(data, "Content-Type: image/jpeg\r\n\r\n", len) == 0);
++    } else {
++        assert(data == (const char *)fake.fb.buf);
++        assert(len == fake.fb.len);
++        fake.now_us += fake.payload_delay[fake.completed];
++    }
++    if (fake.phase == fake.fail_phase) return ESP_FAIL;
++    if (++fake.phase == 3) {
++        fake.phase = 0;
++        ++fake.completed;
++    }
++    return ESP_OK;
++}
++
++esp_err_t httpd_start(httpd_handle_t *server, const httpd_config_t *config)
++{
++    assert(config->server_port == 81);
++    *server = &fake;
++    return ESP_OK;
++}
++
++esp_err_t httpd_register_uri_handler(httpd_handle_t server, const httpd_uri_t *uri)
++{
++    assert(server == &fake);
++    assert(strcmp(uri->uri, "/") == 0 && uri->method == HTTP_GET);
++    fake.handler = uri->handler;
++    return ESP_OK;
++}
++
++static void run_handler(void)
++{
++    httpd_req_t req = {0};
++    assert(start_webserver() == &fake);
++    assert(fake.handler != NULL);
++    assert(fake.handler(&req) == ESP_FAIL);
++    assert(!fake.held);
++}
++
++static void check_intervals(void)
++{
++    for (int i = 1; i < fake.boundaries; ++i) {
++        assert(fake.starts[i] - fake.starts[i - 1] >= 200000);
++    }
++}
++
++int main(void)
++{
++    reset_fake();
++    for (int i = 0; i < MAX_FRAMES; ++i) fake.payload_delay[i] = 20000;
++    run_handler();
++    assert(fake.fps_header && fake.completed == 4);
++    assert(fake.captures == fake.returns);
++    for (int i = 0; i < fake.boundaries; ++i) {
++        // The 20 ms send time must be included, not added to a 200 ms sleep.
++        assert(fake.starts[i] == 1000000 + i * 200000);
++    }
++    puts("PASS: 5 FPS cadence includes send time; waits hold no frame");
++
++    reset_fake();
++    fake.payload_delay[0] = 450000;
++    fake.payload_delay[1] = 10000;
++    run_handler();
++    check_intervals();
++    assert(fake.starts[1] == 1450000);
++    assert(fake.starts[2] == 1650000);
++    assert(fake.captures == fake.returns);
++    puts("PASS: slow network resets cadence without catch-up bursts");
++
++    reset_fake();
++    fake.early_wake = true;
++    run_handler();
++    check_intervals();
++    assert(fake.delays > fake.completed);
++    assert(fake.starts[1] == 1205000);
++    puts("PASS: early tick wake is rechecked before sending");
++
++    reset_fake();
++    fake.capture_delay[0] = 60000;
++    fake.capture_delay[2] = 300000;
++    run_handler();
++    check_intervals();
++    assert(fake.starts[0] == 1060000);
++    assert(fake.starts[1] == 1260000);
++    assert(fake.starts[2] == 1760000);
++    assert(fake.starts[3] == 1960000);
++    puts("PASS: varying capture latency cannot shorten send intervals");
++
++    for (int phase = 0; phase < 3; ++phase) {
++        reset_fake();
++        fake.fail_phase = phase;
++        run_handler();
++        assert(fake.captures == 1 && fake.returns == 1 && fake.completed == 0);
++    }
++    puts("PASS: boundary, header, and payload failures return the frame exactly once");
++
++    reset_fake();
++    fake.fail_capture = 0;
++    run_handler();
++    assert(fake.returns == 0 && fake.boundaries == 0);
++    reset_fake();
++    fake.jpeg[0] = 0;
++    run_handler();
++    assert(fake.returns == 1 && fake.boundaries == 0);
++    reset_fake();
++    fake.type_failure = true;
++    run_handler();
++    assert(fake.captures == 0);
++    puts("PASS: capture, invalid JPEG, and HTTP setup failures release resources");
++    return 0;
++}

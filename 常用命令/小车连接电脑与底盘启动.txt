@@ -1,0 +1,195 @@
+小车连接电脑与底盘启动（ROS 2 Humble）
+
+工作空间：~/leap-ros
+连接方式：小车 MCU 通过 Wi-Fi 向电脑上的 micro-ROS Agent 连接。
+小车 IP：10.1.1.246（2026-11-06 用户最新提供；若 IP 改变，请替换）。
+Agent 端口：UDP 8888；下面统一使用 ROS_DOMAIN_ID=0，需与 MCU 配置一致。
+所有命令都在这台 Ubuntu 电脑的终端中运行。
+
+一、连接网络并确认电脑 IP
+
+给小车上电，让小车与电脑连接到可互相通信的局域网。
+查看电脑网络连接：
+
+nmcli device status
+nmcli connection show --active
+
+若电脑还没有连接所需 Wi-Fi，可执行下面命令。
+先把“Wi-Fi名称”替换成小车所在的 Wi-Fi 名称，密码按提示输入：
+
+nmcli --ask device wifi connect "Wi-Fi名称" ifname wlp0s20f3
+
+已经连接正确网络时，跳过上面的连接命令。
+接着查看到小车的网络路由，并测试能否访问小车：
+
+ip -4 route get 10.1.1.246
+ping -c 4 10.1.1.246
+
+# 此前备注：10.1.1.237（小车1号）；本次目标以最新 IP 10.1.1.246 为准。
+ip route 输出中 src 后面的地址，就是电脑访问小车时使用的 IP。
+小车 MCU 的 Agent 目标 IP 应设为这个电脑 IP，端口设为 8888。
+10.1.1.246 是小车的 IP；Agent 运行在电脑上，目标 IP 要填电脑的。
+如果电脑 IP 改变，需要同步修改 MCU 的 Agent 配置。
+小车的配置网页使用新地址 http://10.1.1.246/，在其中查看“通信设置”。
+通信模式选择 micro-ROS，Agent IP 填电脑 IP，Agent Port 填 8888。
+“保存通信设置并重启”会重启小车，仅在需要修改或重新连接时使用。
+ping 通只代表网络可达，是否成功连接还要看后面的 ROS 数据。
+
+二、终端一：启动小车与电脑之间的通信 Agent
+
+Docker 命令监听电脑 UDP 8888，无需在其中填写小车 IP。
+如果旧 Agent 仍在运行，先在原终端按 Ctrl+C 退出，再执行下面的命令。
+
+sudo docker run -it --rm \
+  --net=host --privileged \
+  -v /dev:/dev -v /dev/shm:/dev/shm \
+  -e ROS_DOMAIN_ID=0 \
+  -e ROS_LOCALHOST_ONLY=0 \
+  microros/micro-ros-agent:humble udp4 --port 8888 -v6
+
+小车断电、充电或反复重连后，如果 /odom 的 Publisher count 或
+/cmd_vel 的 Subscription count 大于 1，可能存在旧会话残留。
+先在原 Agent 终端按 Ctrl+C 退出，再完整执行上面的 Docker 命令。
+保持终端运行，等待重新出现 session established。
+在另一个已加载 ROS 工作空间的终端中检查：
+
+ros2 topic info /odom
+ros2 topic info /cmd_vel
+
+单车运行时应只有一个 /odom 发布者和一个 /cmd_vel 订阅者。
+如果重启 Agent 后仍有多个端点，先确认是否有其他小车接入同一 Agent。
+
+如果网络能 ping 通，Agent 已监听 8888，且小车通信设置正确，
+但 /odom 和 /cmd_vel 都没有出现，可按下面顺序恢复会话：
+1. 保持 Agent 终端运行。
+2. 给小车控制器按一次复位键；或在 http://10.1.1.246/ 的通信设置中，
+   保持原有正确配置，点击“保存通信设置并重启”。这会重启小车控制器。
+3. 等待 Agent 终端出现新的 session established，再检查话题和实时数据。
+小车页面的 Agent IP 应为电脑 IP（本次实测 10.1.1.249），端口 8888。
+
+三、终端二：启动底盘程序
+
+source /opt/ros/humble/setup.bash
+source ~/leap-ros/install/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+ros2 launch chuyun_bringup chuyun_bringup.launch.py
+
+保持这个终端运行。该启动文件会启动机器人模型、里程计/IMU 适配及 EKF。
+底盘的 MCU 数据通过终端一的 Agent 接入，两个终端都需要保持运行。
+
+四、终端三：确认小车已经连接
+
+source /opt/ros/humble/setup.bash
+source ~/leap-ros/install/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+ros2 topic list
+
+分别执行下面命令，检查原始里程计、IMU 和融合里程计。
+每条命令收到一条数据后会自动退出；持续等待说明尚未收到对应数据：
+
+ros2 topic echo /odom nav_msgs/msg/Odometry --once --qos-reliability best_effort
+ros2 topic echo /imu sensor_msgs/msg/Imu --once --qos-reliability best_effort
+ros2 topic echo /odometry/filtered nav_msgs/msg/Odometry --once --qos-reliability best_effort
+
+检查小车是否已订阅速度命令话题：
+
+ros2 topic info /cmd_vel --verbose
+
+确认 /odom、/imu 持续有新数据，且 /cmd_vel 的订阅者中有小车 MCU 节点。
+只有话题名称并不足以确认连接成功；可继续查看里程计接收频率：
+
+ros2 topic hz /odom
+
+按 Ctrl+C 结束频率查看。
+
+五、终端四：低速试动测试（前进一下后自动停车）
+
+保持 Agent 和底盘终端运行，确认前方有空地。
+先执行下面的查看命令，确认 /cmd_vel 有小车 MCU 的订阅者，
+并确认没有遥控、导航等其他程序正在发布速度（Publisher count 应为 0）：
+
+source /opt/ros/humble/setup.bash
+source ~/leap-ros/install/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+ros2 topic info /cmd_vel --verbose
+
+检查通过后，在新终端完整复制下面的测试命令，包含环境加载和整个括号块。
+以 20 Hz 发送 20 次前进指令，速度 0.03 m/s，持续约 1 秒；
+随后自动连续发送零速度停车。实际位移还受启动、停车消息传递和轮胎影响。
+按 Ctrl+C 中断时也会执行停车；执行结束后可再次运行同一个命令块试动。
+
+source /opt/ros/humble/setup.bash
+source ~/leap-ros/install/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+
+(
+  stop_car() {
+    timeout --signal=INT --kill-after=2s 5s ros2 topic pub /cmd_vel geometry_msgs/msg/Twist '{}' --rate 20 --times 20 --wait-matching-subscriptions 1 --qos-durability volatile --qos-depth 1
+  }
+  trap stop_car EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  timeout --signal=INT --kill-after=2s 10s ros2 topic pub /cmd_vel geometry_msgs/msg/Twist '{linear: {x: 0.03, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}' --rate 20 --times 20 --wait-matching-subscriptions 1 --qos-durability volatile --qos-depth 1
+)
+
+如果一直显示 Waiting for at least 1 matching subscription(s)，
+说明未找到兼容的 /cmd_vel 订阅者，先检查 Agent 和小车连接。
+上述命令设有等待超时，不会无限等待。
+
+需要单独发送停车指令时，在已加载上述 ROS 环境的终端执行：
+
+ros2 topic pub /cmd_vel geometry_msgs/msg/Twist '{}' --rate 20 --times 20 --wait-matching-subscriptions 1 --qos-durability volatile --qos-depth 1
+
+六、没有数据时检查
+
+1. 小车是否上电，网络是否互通，小车 IP 是否仍为 10.1.1.246。
+2. MCU 的 Agent 目标是否为电脑当前 IP，端口是否为 UDP 8888。
+3. 小车、Agent、底盘终端的 ROS_DOMAIN_ID 是否一致。
+4. UDP 8888 是否已有其他进程监听，电脑防火墙是否允许小车访问该端口。
+5. Agent 启动后小车是否已重连，必要时按小车复位键。
+6. 如果实际话题带命名空间，以 ros2 topic list 为准替换检查命令中的话题。
+
+如果 IP、端口正确且 Agent 已监听，但 /odom、/imu 仍无数据，继续检查：
+
+# 查看小车当前通信配置与状态（只读）
+curl --noproxy '*' --connect-timeout 2 --max-time 5 http://10.1.1.246/api/status
+
+# 检查 /odom 是否真的有发布者；Publisher count: 0 表示没有数据源
+ros2 topic info /odom --verbose
+ros2 topic info /cmd_vel --verbose
+
+# 查看防火墙状态；sudo 会提示输入电脑登录密码
+sudo ufw status verbose
+
+仅当 UFW 已启用且规则未允许小车访问 UDP 8888 时，按实际 IP 放行：
+
+sudo ufw allow in on wlp0s20f3 proto udp from 10.1.1.246 to 10.1.1.249 port 8888
+
+上面 10.1.1.249 是此前测得的电脑 Wi-Fi IP。
+先以 ip -4 route get 10.1.1.246 输出的 src 地址为准，同步替换规则中的电脑 IP。
+不要通过关闭整个防火墙来代替检查。
+
+需要查看 Agent 详细日志时，先在原 Agent 终端按 Ctrl+C，
+然后在同一个已加载环境的终端执行，避免同时启动两个 Agent：
+
+ros2 run micro_ros_agent micro_ros_agent udp4 -p 8888 -v 6
+
+观察有无 create_client、建立 session 或错误日志。
+仅看到 Agent 开始监听，尚不足以确认小车已连接。
+
+七、结束运行
+
+完成试动并停车后，在终端二按 Ctrl+C 退出底盘程序，再在终端一按 Ctrl+C 退出 Agent。
+
+八、2026-11-06 最新连接验证
+
+小车 10.1.1.246 已通过 micro-ROS Agent 连接电脑 10.1.1.249:8888。
+已实际收到 /odom、/imu 和 /odometry/filtered 数据。
+/odom 发布者为 1，/cmd_vel 订阅者为 1，当前速度发布者为 0。
+底盘启动程序已由本次操作启动并保持运行；使用期间保留 Agent 和底盘进程。
+如果底盘已经运行，后续终端只需加载环境，无需重复启动同一套底盘节点。
+本次仅恢复通信和底盘节点，没有发送运动指令。

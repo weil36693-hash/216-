@@ -1,0 +1,1645 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 866e752..b357ecb 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,12 +1,13 @@
+-# For more information about build system see
+-# https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html
+-# The following five lines of boilerplate have to be in your project's
+-# CMakeLists in this exact order for cmake to work correctly
+-cmake_minimum_required(VERSION 3.16)
+-
+-include($ENV{IDF_PATH}/tools/cmake/project.cmake)
++# For more information about build system see
++# https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html
++# The following five lines of boilerplate have to be in your project's
++# CMakeLists in this exact order for cmake to work correctly
++cmake_minimum_required(VERSION 3.16)
++
++set(PROJECT_VER "2026.11.16-runtime1")
++include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+ project(gc0308_http_stream)
+-
+-if(TARGET merge-bin)
+-    add_custom_target(merged_bin ALL DEPENDS merge-bin)
+-endif()
++
++if(TARGET merge-bin)
++    add_custom_target(merged_bin ALL DEPENDS merge-bin)
++endif()
+diff --git a/README.md b/README.md
+index e304ee9..f09047b 100644
+--- a/README.md
++++ b/README.md
+@@ -30,3 +30,28 @@ ESP32-S3 图传相机工程，支持配网页面、MJPEG 视频流、UDP 发现
+ - `partitions.csv`：分区表
+ - `sdkconfig`：当前配置
+ 
++## 本地修改：相机源端约 5 FPS
++
++`main/Kconfig.projbuild` 的 `CONFIG_CAMERA_STREAM_FPS` 默认值为 5，
++可在 `idf.py menuconfig` 的 `Camera streaming` 中修改，范围 1～30。
++限频发生在相机 HTTP 视频发送之前，默认相邻帧发送起点至少间隔 200 ms。
++慢客户端会使实际帧率更低，恢复后不集中补发过期帧。
++
++等待期间不持有帧缓冲；保留现有双缓冲和 `CAMERA_GRAB_LATEST`。
++传感器仍可持续高速采集，网络上只输出被选中的帧。因此这是相机端图传限频，
++不声称把传感器曝光频率也设置为 5 Hz。VGA、JPEG 质量、Wi-Fi 和 I2C 协议保持原配置。
++HTTP 视频响应头 `X-Camera-Stream-FPS: 5` 与串口日志用于识别该限频版本；
++实际带宽和帧率仍需刷入后测量。
++
++本机编译使用 ESP-IDF 5.5.3，构建脚本及交付记录位于：
++`/home/ros-car/leap-ros/log/camera_firmware_5fps_build/`。
++正式写入前应核对相机 USB 身份、原机分区与活动应用槽，并备份原机 Flash。
++构建目录自动生成的 `merged-binary.bin` 不作为保留原机 NVS 的升级包使用。
++
++
++## 运行时参数版 2026.11.16-runtime1
++
++最新版本支持网页或 JSON API 调整曝光、白平衡、增益、JPEG质量、分辨率与图传帧率，
++成功保存后写入 NVS。Wi-Fi 配网兼容旧接口；新增版本上报与主电脑 SNTP 同步。
++完整字段、运行语义和验证范围见 [RUNTIME_API.md](RUNTIME_API.md)。
++上面的固定5FPS说明为此前版本；本版5FPS只是初始默认值。
+diff --git a/main/CMakeLists.txt b/main/CMakeLists.txt
+index c2d04aa..fcd5389 100644
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -3,6 +3,9 @@ idf_component_register(
+         "main.c"
+         "board_control.c"
+         "camera_init.c"
++        "camera_settings.c"
++        "camera_settings_json.c"
++        "camera_runtime.c"
+         "wifi_manager.c"
+         "web_config.c"
+         "web_mjpeg.c"
+@@ -15,6 +18,9 @@ idf_component_register(
+         esp_event
+         esp_netif
+         esp_http_server
++        esp_timer
++        esp_app_format
++        json
+         nvs_flash
+         esp_psram
+         esp_driver_i2c
+diff --git a/main/camera_init.c b/main/camera_init.c
+index dfad411..93490ca 100644
+--- a/main/camera_init.c
++++ b/main/camera_init.c
+@@ -20,7 +20,7 @@
+ #define CAM_PIN_D6       17
+ #define CAM_PIN_D7       16
+ 
+-#define CAMERA_FRAME_SIZE           FRAMESIZE_VGA
++#define CAMERA_FRAME_SIZE           FRAMESIZE_UXGA
+ #define CAMERA_PIXEL_FORMAT         PIXFORMAT_JPEG
+ #define CAMERA_JPEG_QUALITY          12
+ 
+@@ -78,7 +78,8 @@ esp_err_t camera_init(void)
+ 
+         .pixel_format   = CAMERA_PIXEL_FORMAT,
+         .frame_size     = CAMERA_FRAME_SIZE,
+-        // JPEG is compressed by the OV3660 sensor before the frame reaches the ESP32-S3.
++        // Allocate for the largest supported runtime resolution before switching
++        // to the saved/default size. Native sensor JPEG avoids software encoding.
+         .jpeg_quality   = CAMERA_JPEG_QUALITY,
+         .fb_count       = 2,
+         .fb_location    = CAMERA_FB_IN_PSRAM,
+diff --git a/main/main.c b/main/main.c
+index 0e891ec..b832684 100644
+--- a/main/main.c
++++ b/main/main.c
+@@ -7,6 +7,7 @@
+ 
+ #include "board_control.h"
+ #include "camera_init.h"
++#include "camera_runtime.h"
+ #include "i2c_slave_comm.h"
+ #include "udp_discovery.h"
+ #include "web_config.h"
+@@ -18,17 +19,15 @@ static const char *TAG = "GC0308_STREAM";
+ void app_main(void)
+ {
+     esp_err_t ret = nvs_flash_init();
+-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
+-        ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+-        ESP_ERROR_CHECK(nvs_flash_erase());
+-        ret = nvs_flash_init();
+-    }
++    // Preserve every vehicle's saved credentials/calibration on NVS errors.
++    // Recovery must be explicit; never erase the whole partition at boot.
+     ESP_ERROR_CHECK(ret);
+ 
+     ESP_ERROR_CHECK(board_control_start());
++    ESP_ERROR_CHECK(camera_init());
++    ESP_ERROR_CHECK(camera_runtime_init());
+     ESP_ERROR_CHECK(wifi_manager_start());
+     ESP_ERROR_CHECK(i2c_slave_comm_start());
+-    ESP_ERROR_CHECK(camera_init());
+ 
+     httpd_handle_t config_server = start_config_webserver();
+     if (!config_server) {
+diff --git a/main/web_config.c b/main/web_config.c
+index ab68c68..b0ad385 100644
+--- a/main/web_config.c
++++ b/main/web_config.c
+@@ -16,6 +16,7 @@
+ #include "lwip/sockets.h"
+ 
+ #include "wifi_manager.h"
++#include "camera_runtime.h"
+ 
+ static const char *TAG = "WEB_CONFIG";
+ 
+@@ -174,7 +175,7 @@ static void restart_task(void *arg)
+ 
+ static esp_err_t wifi_page_handler(httpd_req_t *req)
+ {
+-    char html[3072];
++    char html[3200];
+     esp_ip4_addr_t ip = wifi_manager_get_ip();
+ 
+     int len = snprintf(
+@@ -195,6 +196,7 @@ static esp_err_t wifi_page_handler(httpd_req_t *req)
+         ".meta{padding:10px 12px;background:#f0f4f8;border-radius:6px;}"
+         "</style></head><body><main>"
+         "<h1>Maturo图传相机配网页面</h1>"
++        "<p><a href=\"/settings\">曝光、白平衡、增益、画质与帧率设置</a></p>"
+         "<p class=\"meta\">当前模式: %s<br>配网地址: http://" IPSTR "/<br>视频地址: http://" IPSTR ":81/</p>"
+         "<form method=\"post\" action=\"/web/cgi-bin/his3510/param.cgi\">"
+         "<input type=\"hidden\" name=\"cmd\" value=\"setwirelessattr\">"
+@@ -283,7 +285,7 @@ static esp_err_t wifi_param_handler(httpd_req_t *req)
+ 
+ static esp_err_t handshake_handler(httpd_req_t *req)
+ {
+-    char json[256];
++    char json[384];
+     esp_ip4_addr_t ip = wifi_manager_get_ip();
+     const char *device_name = wifi_manager_get_device_name();
+ 
+@@ -292,6 +294,7 @@ static esp_err_t handshake_handler(httpd_req_t *req)
+         sizeof(json),
+         "{"
+         "\"ok\":true,"
++        "\"firmware_version\":\"" CAMERA_FIRMWARE_VERSION "\","
+         "\"name\":\"%s\","
+         "\"ip\":\"" IPSTR "\","
+         "\"mode\":\"%s\","
+@@ -320,7 +323,7 @@ httpd_handle_t start_config_webserver(void)
+     httpd_handle_t server = NULL;
+ 
+     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+-    config.max_uri_handlers = 24;
++    config.max_uri_handlers = 32;
+     config.stack_size = 8192;
+ 
+     esp_err_t ret = httpd_start(&server, &config);
+@@ -391,6 +394,7 @@ httpd_handle_t start_config_webserver(void)
+     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &handshake_uri));
+     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &api_handshake_uri));
+ 
+-    ESP_LOGI(TAG, "Wi-Fi config webserver started, handshake API enabled");
++    ESP_ERROR_CHECK(camera_runtime_register_http(server));
++    ESP_LOGI(TAG, "Wi-Fi config webserver started, handshake and runtime APIs enabled");
+     return server;
+ }
+diff --git a/main/web_mjpeg.c b/main/web_mjpeg.c
+index c8fd82c..66742f6 100644
+--- a/main/web_mjpeg.c
++++ b/main/web_mjpeg.c
+@@ -1,15 +1,33 @@
+ #include "web_mjpeg.h"
+ 
+ #include <string.h>
++#include <stdio.h>
++#include "camera_runtime.h"
+ 
+ #include "esp_camera.h"
+ #include "esp_err.h"
+ #include "esp_log.h"
++#include "esp_timer.h"
++#include "freertos/FreeRTOS.h"
++#include "freertos/task.h"
++#include "sdkconfig.h"
+ 
+ static const char *TAG = "WEB_MJPEG";
+ 
+ #define STREAM_BOUNDARY "frame"
+ 
++
++static void wait_for_frame_deadline(int64_t deadline_us)
++{
++    int64_t remaining_us;
++    while ((remaining_us = deadline_us - esp_timer_get_time()) > 0) {
++        // Round up, then recheck after waking: a tick boundary can wake a
++        // FreeRTOS delay before the requested wall-clock interval has elapsed.
++        TickType_t ticks = (TickType_t)((remaining_us * configTICK_RATE_HZ + 999999) / 1000000);
++        vTaskDelay(ticks > 0 ? ticks : 1);
++    }
++}
++
+ static const char *STREAM_CONTENT_TYPE =
+     "multipart/x-mixed-replace;boundary=" STREAM_BOUNDARY;
+ 
+@@ -28,14 +46,29 @@ static esp_err_t stream_handler(httpd_req_t *req)
+ 
+     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
++    if (!camera_runtime_lock(2000)) return ESP_FAIL;
++    int initial_fps = camera_runtime_get_fps();
++    camera_runtime_unlock();
++    char fps_header[8];
++    snprintf(fps_header, sizeof(fps_header), "%d", initial_fps);
++    httpd_resp_set_hdr(req, "X-Camera-Stream-FPS", fps_header);
++    httpd_resp_set_hdr(req, "X-Camera-Firmware", CAMERA_FIRMWARE_VERSION);
+ 
+-    ESP_LOGI(TAG, "MJPEG client connected");
++    ESP_LOGI(TAG, "MJPEG connected, runtime stream limit %d FPS", initial_fps);
+ 
++    int64_t next_frame_us = 0;
+     while (true) {
++        // Wait before taking a frame: GRAB_LATEST keeps refreshing the driver's
++        // queue during this idle period, with no frame buffer held by us.
++        wait_for_frame_deadline(next_frame_us);
++        if (!camera_runtime_lock(2000)) return ESP_FAIL;
++        if (!camera_runtime_stream_ready()) { camera_runtime_unlock(); return ESP_FAIL; }
++        int fps = camera_runtime_get_fps();
+         camera_fb_t *fb = esp_camera_fb_get();
+ 
+         if (!fb) {
+             ESP_LOGE(TAG, "Camera capture failed during stream");
++            camera_runtime_unlock();
+             return ESP_FAIL;
+         }
+ 
+@@ -44,18 +77,24 @@ static esp_err_t stream_handler(httpd_req_t *req)
+             ESP_LOGE(TAG, "Camera returned a non-JPEG frame: format=%d len=%u",
+                      fb->format, (unsigned int)fb->len);
+             esp_camera_fb_return(fb);
++            camera_runtime_unlock();
+             return ESP_FAIL;
+         }
+ 
++        // Use the actual send start rather than an old deadline, so slow
++        // captures/clients never cause catch-up bursts of queued frames.
++        next_frame_us = esp_timer_get_time() + (1000000LL + fps - 1) / fps;
+         res = httpd_resp_send_chunk(req, STREAM_BOUNDARY_LINE, strlen(STREAM_BOUNDARY_LINE));
+         if (res != ESP_OK) {
+             esp_camera_fb_return(fb);
++            camera_runtime_unlock();
+             break;
+         }
+ 
+         res = httpd_resp_send_chunk(req, STREAM_PART_HEADER, strlen(STREAM_PART_HEADER));
+         if (res != ESP_OK) {
+             esp_camera_fb_return(fb);
++            camera_runtime_unlock();
+             break;
+         }
+ 
+@@ -64,10 +103,12 @@ static esp_err_t stream_handler(httpd_req_t *req)
+         res = httpd_resp_send_chunk(req, (const char *)fb->buf, fb->len);
+         if (res != ESP_OK) {
+             esp_camera_fb_return(fb);
++            camera_runtime_unlock();
+             break;
+         }
+ 
+         esp_camera_fb_return(fb);
++        camera_runtime_unlock();
+ 
+         if (res != ESP_OK) {
+             break;
+@@ -87,6 +128,7 @@ httpd_handle_t start_webserver(void)
+     config.ctrl_port = 32769;
+     config.max_uri_handlers = 4;
+     config.stack_size = 8192;
++    config.send_wait_timeout = 2;
+ 
+     esp_err_t ret = httpd_start(&server, &config);
+     if (ret != ESP_OK) {
+diff --git a/main/wifi_manager.c b/main/wifi_manager.c
+index 091b43b..d5fa8fa 100644
+--- a/main/wifi_manager.c
++++ b/main/wifi_manager.c
+@@ -1,4 +1,5 @@
+ #include "wifi_manager.h"
++#include "camera_runtime.h"
+ 
+ #include <string.h>
+ 
+@@ -24,6 +25,8 @@
+ #define WIFI_NVS_NAMESPACE "wifi_cfg"
+ #define WIFI_NVS_SSID_KEY  "ssid"
+ #define WIFI_NVS_PASS_KEY  "pass"
++#define WIFI_NVS_RECORD_KEY "sta_v1"
++typedef struct { uint32_t schema; char ssid[33]; char password[65]; } wifi_saved_record_t;
+ 
+ #define CONFIG_AP_CHANNEL  1
+ #define CONFIG_AP_MAX_CONN 4
+@@ -117,6 +120,8 @@ static void wifi_event_handler(
+                      ap_info.primary);
+         }
+ 
++        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_ps(WIFI_PS_NONE));
++        camera_runtime_time_start();
+         s_connected = true;
+         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+     }
+@@ -124,19 +129,31 @@ static void wifi_event_handler(
+ 
+ static bool load_sta_config(wifi_config_t *wifi_config)
+ {
+-    char ssid[sizeof(wifi_config->sta.ssid)] = {0};
+-    char password[sizeof(wifi_config->sta.password)] = {0};
++    char ssid[33] = {0};
++    char password[65] = {0};
+     size_t ssid_len = sizeof(ssid);
+     size_t pass_len = sizeof(password);
+ 
+     nvs_handle_t nvs;
+     esp_err_t err = nvs_open(WIFI_NVS_NAMESPACE, NVS_READONLY, &nvs);
+     if (err == ESP_OK) {
+-        err = nvs_get_str(nvs, WIFI_NVS_SSID_KEY, ssid, &ssid_len);
+-        if (err == ESP_OK) {
+-            esp_err_t pass_err = nvs_get_str(nvs, WIFI_NVS_PASS_KEY, password, &pass_len);
+-            if (pass_err != ESP_OK && pass_err != ESP_ERR_NVS_NOT_FOUND) {
+-                err = pass_err;
++        wifi_saved_record_t record={0};
++        size_t length=sizeof(record);
++        err=nvs_get_blob(nvs,WIFI_NVS_RECORD_KEY,&record,&length);
++        if (err==ESP_OK) {
++            if(length!=sizeof(record)||record.schema!=1 ||
++               !memchr(record.ssid,0,sizeof(record.ssid)) ||
++               !memchr(record.password,0,sizeof(record.password))) err=ESP_ERR_INVALID_ARG;
++            else {
++                memcpy(ssid,record.ssid,sizeof(ssid));
++                memcpy(password,record.password,sizeof(password));
++            }
++        } else if(err==ESP_ERR_NVS_NOT_FOUND) {
++            // Migrate lazily: old vehicles retain wifi_cfg/ssid and pass.
++            err = nvs_get_str(nvs, WIFI_NVS_SSID_KEY, ssid, &ssid_len);
++            if (err == ESP_OK) {
++                esp_err_t pass_err = nvs_get_str(nvs, WIFI_NVS_PASS_KEY, password, &pass_len);
++                if (pass_err != ESP_OK && pass_err != ESP_ERR_NVS_NOT_FOUND) err = pass_err;
+             }
+         }
+         nvs_close(nvs);
+@@ -150,8 +167,8 @@ static bool load_sta_config(wifi_config_t *wifi_config)
+ 
+     ESP_LOGI(TAG, "Using saved STA config");
+     memset(wifi_config, 0, sizeof(*wifi_config));
+-    strlcpy((char *)wifi_config->sta.ssid, ssid, sizeof(wifi_config->sta.ssid));
+-    strlcpy((char *)wifi_config->sta.password, password, sizeof(wifi_config->sta.password));
++    memcpy(wifi_config->sta.ssid, ssid, strlen(ssid));
++    memcpy(wifi_config->sta.password, password, strlen(password));
+     return wifi_config->sta.ssid[0] != '\0';
+ }
+ 
+@@ -309,6 +326,7 @@ static esp_err_t start_ap(void)
+     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+     ESP_ERROR_CHECK(esp_wifi_start());
++    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+ 
+     ESP_LOGI(TAG, "AP config mode started");
+     ESP_LOGI(TAG, "AP SSID: %s", s_device_name);
+@@ -342,6 +360,7 @@ esp_err_t wifi_manager_start(void)
+ 
+ esp_err_t wifi_manager_save_sta(const char *ssid, const char *password)
+ {
++    if (!ssid || !password) return ESP_ERR_INVALID_ARG;
+     size_t ssid_len = strlen(ssid);
+     size_t pass_len = strlen(password);
+ 
+@@ -353,15 +372,22 @@ esp_err_t wifi_manager_save_sta(const char *ssid, const char *password)
+         return ESP_ERR_INVALID_ARG;
+     }
+ 
++    if (pass_len == 64) {
++        for (size_t i=0; i<pass_len; i++) {
++            char c=password[i];
++            if (!((c>='0'&&c<='9')||(c>='a'&&c<='f')||(c>='A'&&c<='F'))) return ESP_ERR_INVALID_ARG;
++        }
++    }
+     nvs_handle_t nvs;
+     ESP_RETURN_ON_ERROR(nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &nvs),
+                         TAG,
+                         "Open Wi-Fi NVS failed");
+ 
+-    esp_err_t err = nvs_set_str(nvs, WIFI_NVS_SSID_KEY, ssid);
+-    if (err == ESP_OK) {
+-        err = nvs_set_str(nvs, WIFI_NVS_PASS_KEY, password);
+-    }
++    wifi_saved_record_t record={.schema=1};
++    memcpy(record.ssid,ssid,ssid_len);
++    memcpy(record.password,password,pass_len);
++    // A single record prevents SSID/password from becoming a mismatched pair.
++    esp_err_t err = nvs_set_blob(nvs, WIFI_NVS_RECORD_KEY, &record, sizeof(record));
+     if (err == ESP_OK) {
+         err = nvs_commit(nvs);
+     }
+@@ -458,3 +484,14 @@ static esp_err_t clear_sta_config_nvs(void)
+     nvs_close(nvs);
+     return err;
+ }
++
++esp_err_t wifi_manager_get_saved_ssid(char *output, size_t capacity)
++{
++    if (!output || capacity < 33) return ESP_ERR_INVALID_ARG;
++    output[0]=0;
++    wifi_config_t config;
++    if(!load_sta_config(&config))return ESP_ERR_NVS_NOT_FOUND;
++    memcpy(output,config.sta.ssid,32);
++    output[32]=0;
++    return ESP_OK;
++}
+diff --git a/main/wifi_manager.h b/main/wifi_manager.h
+index 9abbe21..5f48edd 100644
+--- a/main/wifi_manager.h
++++ b/main/wifi_manager.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <stdbool.h>
++#include <stddef.h>
+ 
+ #include "esp_err.h"
+ #include "esp_netif_ip_addr.h"
+@@ -16,3 +17,5 @@ bool wifi_manager_is_connected(void);
+ const char *wifi_manager_get_mode_name(void);
+ const char *wifi_manager_get_device_name(void);
+ esp_ip4_addr_t wifi_manager_get_ip(void);
++
++esp_err_t wifi_manager_get_saved_ssid(char *output, size_t capacity);
+diff --git a/sdkconfig b/sdkconfig
+index b5049af..bd5ebb7 100644
+--- a/sdkconfig
++++ b/sdkconfig
+@@ -595,6 +595,12 @@ CONFIG_PARTITION_TABLE_OFFSET=0x8000
+ CONFIG_PARTITION_TABLE_MD5=y
+ # end of Partition Table
+ 
++#
++# Camera streaming
++#
++CONFIG_CAMERA_STREAM_FPS=5
++# end of Camera streaming
++
+ #
+ # Compiler options
+ #
+@@ -2323,8 +2329,9 @@ CONFIG_CAMERA_CORE0=y
+ # CONFIG_CAMERA_NO_AFFINITY is not set
+ CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=32768
+ # CONFIG_CAMERA_PSRAM_DMA is not set
+-CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE_AUTO=y
+-# CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE_CUSTOM is not set
++# CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE_AUTO is not set
++CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE_CUSTOM=y
++CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE=1048576
+ # CONFIG_CAMERA_CONVERTER_ENABLED is not set
+ # CONFIG_LCD_CAM_ISR_IRAM_SAFE is not set
+ # end of Camera configuration
+diff --git a/RUNTIME_API.md b/RUNTIME_API.md
+new file mode 100644
+index 0000000..0412fb4
+--- /dev/null
++++ b/RUNTIME_API.md
+@@ -0,0 +1,122 @@
++# 相机运行时固件 2026.11.16-runtime1
++
++本版本在相机端限制 MJPEG 图传帧率，默认 5 FPS，运行时范围 1～30。
++传感器继续采集最新画面，帧率表示网络输出上限，不表示曝光频率或保证达到该值。
++传感器、网络和客户端处理能力可能使实际输出更低。
++
++## 网页与命令
++
++- `http://相机IP/settings`：编辑当前参数 JSON，点击“应用并保存”。
++- `http://相机IP/`：原 Wi-Fi 配网页面，保存后重启。
++- `GET /api/status`：固件版本、设备名、IP、参数、Wi-Fi 省电状态和 SNTP 状态。
++- `GET /api/settings`：只返回当前参数。
++- `POST /api/settings`：接受下面字段的部分更新，校验、应用传感器、写 NVS 后返回成功。
++- `POST /api/wifi`：`{"ssid":"实验网络","password":"实际密码"}`，保存后约 1.5 秒重启切换网络。
++- `/handshake` 和 `/api/handshake` 保留旧字段，新增 `firmware_version`。
++- 视频地址仍为 `http://相机IP:81/`。
++
++示例（把相机 IP 替换为实际值；不要用底盘 IP）：
++
++```bash
++curl --noproxy '*' http://相机IP/api/status
++curl --noproxy '*' -H 'Content-Type: application/json' \
++  -d '{"fps":5,"jpeg_quality":20,"resolution":"320x240"}' \
++  http://相机IP/api/settings
++curl --noproxy '*' -H 'Content-Type: application/json' \
++  -d '{"auto_exposure":false,"exposure":300,"auto_gain":false,"gain":5}' \
++  http://相机IP/api/settings
++curl --noproxy '*' -H 'Content-Type: application/json' \
++  -d '{"auto_white_balance":false,"white_balance_mode":3}' \
++  http://相机IP/api/settings
++```
++
++| 字段 | 类型及范围 | 默认及说明 |
++|---|---|---|
++| `fps` | 整数 1～30 | 5，图传输出上限 |
++| `jpeg_quality` | 整数 4～63 | 12，数值越小质量/码率通常越高 |
++| `resolution` | 字符串 | 默认 `640x480`；支持 `160x120`, `320x240`, `640x480`, `800x600`, `1024x768`, `1280x1024`, `1600x1200`，还受实际传感器最大尺寸限制 |
++| `auto_exposure` | JSON 布尔 | `true` 自动曝光 |
++| `exposure` | 整数 0～1200 | 300，仅手动曝光时写硬件；是传感器寄存器单位，**不是微秒** |
++| `exposure_level` | 整数 -2～2 | 0，自动曝光亮度补偿 |
++| `auto_white_balance` | JSON 布尔 | `true` |
++| `white_balance_mode` | 整数 0～4 | 0 自动；1 晴天、2 阴天、3 办公室、4 家居 |
++| `auto_gain` | JSON 布尔 | `true` 自动增益 |
++| `gain` | 整数 0～30 | 0，仅手动增益时写硬件；为驱动增益等级，不是 dB |
++
++自动白平衡必须使用 `auto_white_balance=true, white_balance_mode=0`；
++手动白平衡必须使用 `false` 与 1～4。切换时将这两个字段一起提交。
++白平衡提供自动/预置模式，未宣称支持未经标定的 Kelvin 色温或独立 RGB 增益。
++自动曝光/增益开启时，`exposure`/`gain` 是存储的手动设定值，不是实时自动测量值。
++`GET /api/status` 的 `settings` 是上述设定值；`sensor_consistent` 为 false 时图传停止，
++应重新设置参数或重启，不能把不完整的传感器配置当作成功。
++
++参数拒绝未知字段、重复键、错误类型、非整数和越界值。
++更改参数时持有与图传共享的互斥锁，视频发送/归还帧后才更改传感器，
++再排空旧帧。启动时按 UXGA 初始化，并显式分配两个各 1 MiB 的 JPEG 缓冲，
++避免沿用原 VGA 自动计算的小缓冲。极端高细节/低压缩率帧仍可能超过缓冲，
++驱动会拒绝超限帧；这不保证所有画面组合都能达到目标帧率。
++繁忙时返回 HTTP 503，稍后重试；传感器或 NVS 失败返回 500 并尝试回滚，
++`settings_persisted` 和 `sensor_consistent` 告知回滚状态。HTTP 200 的 `saved=true`
++表示已经应用并完成 NVS 提交。高分辨率/低压缩值可能降低实际帧率并增大带宽。
++
++MJPEG 响应头 `X-Camera-Stream-FPS` 记录本次连接开始时的配置，
++修改后每帧使用新值；需要重新连接才能看到更新的响应头。
++`X-Camera-Firmware` 是该固件版本。
++
++## NVS 与 Wi-Fi
++
++相机参数存为 `cam_runtime/settings_v1` 单记录，包含 schema 版本；缺省或无效记录
++使用默认值并在状态中标注未保存，首次成功设置后持久化。
++启动遇 NVS 空间不足/格式错误不会自动整片擦除，以保留各车凭据与设置。
++
++Wi-Fi 初次升级继续读取原 `wifi_cfg/ssid` 与 `wifi_cfg/pass`。
++首次修改 Wi-Fi 后改用 `wifi_cfg/sta_v1` 单记录，避免 SSID/密码分别写入时不匹配。
++原 CGI 配网地址仍调用同一保存接口；密码不会出现在状态 API 或请求日志中。
++32 字节 SSID 与 64 位十六进制 PSK 完整保留；普通 WPA 密码 8～63 字节，
++空密码表示开放网络。更改 Wi-Fi 属于运行配置，不需刷机，但会重启并暂时中断连接。
++若回退到旧固件，旧固件仍读取旧 SSID/密码键，可能需要重新配网。
++
++STA 启动、重新获 IP、AP 启动路径都显式设 `WIFI_PS_NONE`。
++`GET /api/status` 的 `wifi.power_save` 来自驱动实际查询，正常为 false。
++这关闭站点省电，不保证路由器队列、拥塞或应用处理没有延迟。
++
++## 时间同步与版本
++
++STA 获得 IP 后启动 SNTP，固定主机 `10.1.1.249`、每 60 秒同步，禁用 DHCP
++提供的 NTP 服务器覆盖。`time_sync.synced` 仅在最近 180 秒有成功同步且 Wi-Fi
++仍连接时为 true；未同步时 `last_sync_unix_us` 为 null。时钟同步不表示已测量
++端到端视觉时延，也不承诺微秒级同步精度。主电脑需要正常运行 NTP 服务。
++
++`GET /api/status` 例：
++
++```json
++{
++  "firmware_version":"2026.11.16-runtime1",
++  "firmware":{"version":"2026.11.16-runtime1","project":"gc0308_http_stream",
++    "idf_version":"v5.5.3","build_date":"...","build_time":"...","elf_sha256":"..."},
++  "name":"Maturo_CAM_XXXXXXXXXXXX",
++  "time_sync":{"server":"10.1.1.249","synced":false,"last_sync_unix_us":null,
++    "sync_interval_seconds":60,"last_sync_age_seconds":null},
++  "wifi":{"ssid":"已保存的SSID","mode":"STA","power_save":false}
++}
++```
++
++主机 session 记录应保存 `name`、`firmware` 与 `time_sync`，不能把缺失版本
++默认成新固件版本。相机不主动向主机推日志，由主机在 session 开始/结束读取。
++
++## 构建与验证范围
++
++ESP-IDF 5.5.3，ESP32-S3，4 MB Flash，8 MB Octal PSRAM；保留项目名和分区表。
++只替换活动应用槽即可升级；不要整片擦除或写入其他车的 NVS。
++
++```bash
++bash tests/run_stream_tests.sh
++IDF_PATH=/你的/esp-idf bash tests/run_settings_tests.sh
++idf.py build
++```
++
++离线测试直接编译实际发送函数，验证限帧、失败时帧归还和互斥锁、运行时改帧率；
++参数测试覆盖范围/JSON 类型/重复键/模式冲突、传感器/NVS 失败回滚。
++本次已构建并离线验证，**运行时新版本尚未在实物刷写验证**，不能继承上一版
++固定 5 FPS 的硬件验证结论。批量刷写前需验证单台改参数、重启保留、视频、
++Wi-Fi 切换和 SNTP 状态。
+diff --git a/main/Kconfig.projbuild b/main/Kconfig.projbuild
+new file mode 100644
+index 0000000..e5db887
+--- /dev/null
++++ b/main/Kconfig.projbuild
+@@ -0,0 +1,12 @@
++menu "Camera streaming"
++
++    config CAMERA_STREAM_FPS
++        int "Maximum MJPEG source stream frames per second"
++        range 1 30
++        default 5
++        help
++            Limit frames sent by the camera's HTTP server, before Wi-Fi
++            transmission. The sensor may continue capturing faster;
++            the existing GRAB_LATEST mode discards superseded frames.
++
++endmenu
+diff --git a/main/camera_runtime.c b/main/camera_runtime.c
+new file mode 100644
+index 0000000..54942c3
+--- /dev/null
++++ b/main/camera_runtime.c
+@@ -0,0 +1,326 @@
++#include "camera_runtime.h"
++#include "camera_settings.h"
++#include "camera_settings_json.h"
++#include "wifi_manager.h"
++#include <math.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/time.h>
++#include "cJSON.h"
++#include "esp_app_desc.h"
++#include "esp_camera.h"
++#include "esp_log.h"
++#include "esp_netif_sntp.h"
++#include "esp_sntp.h"
++#include "esp_system.h"
++#include "esp_timer.h"
++#include "esp_wifi.h"
++#include "freertos/FreeRTOS.h"
++#include "freertos/semphr.h"
++#include "freertos/task.h"
++#include "nvs.h"
++
++static const char *TAG="CAM_RUNTIME";
++static SemaphoreHandle_t s_lock;
++static camera_settings_t s_settings;
++static bool s_sensor_consistent;
++static bool s_persisted;
++static bool s_sntp_started;
++static int64_t s_last_sync_us;
++static int64_t s_last_sync_monotonic_us;
++static portMUX_TYPE s_time_mux=portMUX_INITIALIZER_UNLOCKED;
++static const framesize_t s_framesizes[]={FRAMESIZE_QQVGA,FRAMESIZE_QVGA,FRAMESIZE_VGA,
++    FRAMESIZE_SVGA,FRAMESIZE_XGA,FRAMESIZE_SXGA,FRAMESIZE_UXGA};
++
++bool camera_runtime_lock(uint32_t timeout_ms)
++{
++    return s_lock && xSemaphoreTake(s_lock,pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
++}
++void camera_runtime_unlock(void) { xSemaphoreGive(s_lock); }
++// Aligned 32-bit values are atomically accessed on ESP32-S3. Streaming reads FPS
++// under s_lock; the HTTP handler also reads/writes under that same mutex.
++int camera_runtime_get_fps(void) { return s_settings.fps; }
++bool camera_runtime_stream_ready(void) { return s_sensor_consistent; }
++
++static esp_err_t apply_sensor(const camera_settings_t *s)
++{
++    sensor_t *sensor=esp_camera_sensor_get();
++    if (!sensor || !camera_settings_valid(s)) return ESP_ERR_INVALID_ARG;
++    camera_sensor_info_t *info=esp_camera_sensor_get_info(&sensor->id);
++    if (!info || s_framesizes[s->resolution] > info->max_size) return ESP_ERR_NOT_SUPPORTED;
++    // The camera is initialized at UXGA with explicit 1 MiB JPEG buffers.
++    // Very large compressed frames still rely on the driver overflow guard.
++    // This function runs only while no stream owns a fb.
++#define SET(call) do { if ((call) != 0) return ESP_FAIL; } while (0)
++    SET(sensor->set_framesize(sensor,s_framesizes[s->resolution]));
++    SET(sensor->set_quality(sensor,s->jpeg_quality));
++    SET(sensor->set_exposure_ctrl(sensor,s->auto_exposure));
++    SET(sensor->set_aec2(sensor,0));
++    SET(sensor->set_ae_level(sensor,s->exposure_level));
++    if (!s->auto_exposure) SET(sensor->set_aec_value(sensor,s->exposure));
++    SET(sensor->set_whitebal(sensor,s->auto_white_balance));
++    SET(sensor->set_wb_mode(sensor,s->white_balance_mode));
++    SET(sensor->set_gain_ctrl(sensor,s->auto_gain));
++    if (!s->auto_gain) SET(sensor->set_agc_gain(sensor,s->gain));
++#undef SET
++    // Drain queued frames after changing registers; no client can send frames
++    // acquired during a sensor reconfiguration while this mutex is held.
++    for (int i=0;i<3;i++) {
++        camera_fb_t *fb=esp_camera_fb_get();
++        if (!fb) return ESP_FAIL;
++        esp_camera_fb_return(fb);
++    }
++    return ESP_OK;
++}
++
++static esp_err_t save_settings(const camera_settings_t *settings)
++{
++    nvs_handle_t handle;
++    esp_err_t err=nvs_open("cam_runtime",NVS_READWRITE,&handle);
++    if (err != ESP_OK) return err;
++    err=nvs_set_blob(handle,"settings_v1",settings,sizeof(*settings));
++    if (err == ESP_OK) err=nvs_commit(handle);
++    nvs_close(handle);
++    return err;
++}
++
++static bool apply_settings_io(const camera_settings_t *settings,void *context)
++{
++    (void)context;
++    esp_err_t err=apply_sensor(settings);
++    if(err!=ESP_OK) ESP_LOGE(TAG,"Sensor apply failed: %s",esp_err_to_name(err));
++    return err==ESP_OK;
++}
++static bool save_settings_io(const camera_settings_t *settings,void *context)
++{
++    (void)context;
++    esp_err_t err=save_settings(settings);
++    if(err!=ESP_OK) ESP_LOGE(TAG,"NVS save failed: %s",esp_err_to_name(err));
++    return err==ESP_OK;
++}
++esp_err_t camera_runtime_init(void)
++{
++    s_lock=xSemaphoreCreateMutex();
++    if (!s_lock) return ESP_ERR_NO_MEM;
++    camera_settings_defaults(&s_settings);
++    nvs_handle_t handle;
++    esp_err_t err=nvs_open("cam_runtime",NVS_READONLY,&handle);
++    if (err == ESP_OK) {
++        camera_settings_t stored={0};
++        size_t length=sizeof(stored);
++        err=nvs_get_blob(handle,"settings_v1",&stored,&length);
++        nvs_close(handle);
++        if (err == ESP_OK && length == sizeof(stored) && camera_settings_valid(&stored)) {
++            s_settings=stored;
++            s_persisted=true;
++        } else if (err != ESP_ERR_NVS_NOT_FOUND) {
++            ESP_LOGE(TAG,"Saved camera settings invalid; using defaults without erasing NVS");
++        }
++    } else if (err != ESP_ERR_NVS_NOT_FOUND) {
++        ESP_LOGE(TAG,"Cannot read camera settings: %s",esp_err_to_name(err));
++        return err;
++    }
++    err=apply_sensor(&s_settings);
++    if (err != ESP_OK) return err;
++    s_sensor_consistent=true;
++    ESP_LOGI(TAG,"Firmware %s; runtime camera settings enabled",CAMERA_FIRMWARE_VERSION);
++    return ESP_OK;
++}
++
++static void time_synced(struct timeval *tv)
++{
++    portENTER_CRITICAL(&s_time_mux);
++    s_last_sync_us=(int64_t)tv->tv_sec*1000000+tv->tv_usec;
++    s_last_sync_monotonic_us=esp_timer_get_time();
++    portEXIT_CRITICAL(&s_time_mux);
++}
++void camera_runtime_time_start(void)
++{
++    if (s_sntp_started) return;
++    esp_sntp_config_t config=ESP_NETIF_SNTP_DEFAULT_CONFIG(CAMERA_SNTP_SERVER);
++    config.sync_cb=time_synced;
++    config.server_from_dhcp=false;
++    esp_sntp_set_sync_interval(60000);
++    esp_err_t err=esp_netif_sntp_init(&config);
++    if (err == ESP_OK) s_sntp_started=true;
++    else ESP_LOGE(TAG,"SNTP start failed: %s",esp_err_to_name(err));
++}
++
++static cJSON *settings_json(void)
++{
++    cJSON *o=cJSON_CreateObject();
++    if (!o) return NULL;
++#define NUMBER(field) cJSON_AddNumberToObject(o,#field,s_settings.field)
++#define BOOL(field) cJSON_AddBoolToObject(o,#field,s_settings.field)
++    NUMBER(fps); NUMBER(jpeg_quality); NUMBER(exposure); NUMBER(exposure_level);
++    NUMBER(white_balance_mode); NUMBER(gain);
++    BOOL(auto_exposure); BOOL(auto_white_balance); BOOL(auto_gain);
++#undef BOOL
++#undef NUMBER
++    cJSON_AddStringToObject(o,"resolution",camera_resolution_names[s_settings.resolution]);
++    return o;
++}
++static esp_err_t send_json(httpd_req_t *req,cJSON *object)
++{
++    if (!object) return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Out of memory");
++    char *text=cJSON_PrintUnformatted(object);
++    cJSON_Delete(object);
++    if (!text) return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Out of memory");
++    httpd_resp_set_type(req,"application/json; charset=utf-8");
++    httpd_resp_set_hdr(req,"Cache-Control","no-store");
++    esp_err_t err=httpd_resp_sendstr(req,text);
++    free(text);
++    return err;
++}
++static esp_err_t busy_response(httpd_req_t *req)
++{
++    httpd_resp_set_status(req,"503 Service Unavailable");
++    return httpd_resp_sendstr(req,"Camera busy; retry");
++}
++static esp_err_t status_handler(httpd_req_t *req)
++{
++    if (!camera_runtime_lock(2000)) return busy_response(req);
++    cJSON *root=cJSON_CreateObject();
++    cJSON *settings=settings_json();
++    bool consistent=s_sensor_consistent, persisted=s_persisted;
++    camera_runtime_unlock();
++    if (!root || !settings) {cJSON_Delete(root);cJSON_Delete(settings);return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Out of memory");}
++    cJSON_AddBoolToObject(root,"ok",consistent);
++    cJSON_AddItemToObject(root,"settings",settings);
++    cJSON_AddBoolToObject(root,"settings_persisted",persisted);
++    cJSON_AddBoolToObject(root,"sensor_consistent",consistent);
++    cJSON_AddStringToObject(root,"firmware_version",CAMERA_FIRMWARE_VERSION);
++    cJSON *firmware=cJSON_AddObjectToObject(root,"firmware");
++    const esp_app_desc_t *app=esp_app_get_description();
++    char hash[65];
++    for(int i=0;i<32;i++) snprintf(hash+i*2,3,"%02x",app->app_elf_sha256[i]);
++    cJSON_AddStringToObject(firmware,"version",app->version);
++    cJSON_AddStringToObject(firmware,"project",app->project_name);
++    cJSON_AddStringToObject(firmware,"idf_version",app->idf_ver);
++    cJSON_AddStringToObject(firmware,"build_date",app->date);
++    cJSON_AddStringToObject(firmware,"build_time",app->time);
++    cJSON_AddStringToObject(firmware,"elf_sha256",hash);
++    cJSON_AddStringToObject(root,"name",wifi_manager_get_device_name());
++    esp_ip4_addr_t ip=wifi_manager_get_ip();char address[24];
++    snprintf(address,sizeof(address),IPSTR,IP2STR(&ip));cJSON_AddStringToObject(root,"ip",address);
++    cJSON *wifi=cJSON_AddObjectToObject(root,"wifi");char ssid[33]={0};
++    wifi_manager_get_saved_ssid(ssid,sizeof(ssid));
++    cJSON_AddStringToObject(wifi,"ssid",ssid);
++    cJSON_AddStringToObject(wifi,"mode",wifi_manager_get_mode_name());
++    wifi_ps_type_t ps;
++    if (esp_wifi_get_ps(&ps)==ESP_OK) cJSON_AddBoolToObject(wifi,"power_save",ps != WIFI_PS_NONE);
++    else cJSON_AddNullToObject(wifi,"power_save");
++    cJSON *clock=cJSON_AddObjectToObject(root,"time_sync");
++    portENTER_CRITICAL(&s_time_mux);
++    int64_t last=s_last_sync_us, last_monotonic=s_last_sync_monotonic_us;
++    portEXIT_CRITICAL(&s_time_mux);
++    double age=(double)(esp_timer_get_time()-last_monotonic)/1000000.0;
++    cJSON_AddStringToObject(clock,"server",CAMERA_SNTP_SERVER);
++    cJSON_AddBoolToObject(clock,"synced",last>0 && age<180.0 && wifi_manager_is_connected());
++    cJSON_AddNumberToObject(clock,"sync_interval_seconds",60);
++    if(last>0)cJSON_AddNumberToObject(clock,"last_sync_age_seconds",age);
++    else cJSON_AddNullToObject(clock,"last_sync_age_seconds");
++    if(last>0)cJSON_AddNumberToObject(clock,"last_sync_unix_us",(double)last);
++    else cJSON_AddNullToObject(clock,"last_sync_unix_us");
++    cJSON_AddNumberToObject(root,"uptime_us",(double)esp_timer_get_time());
++    return send_json(req,root);
++}
++
++static cJSON *read_json(httpd_req_t *req)
++{
++    if(req->content_len<=0 || req->content_len>1536) return NULL;
++    char *body=malloc(req->content_len+1);
++    if(!body)return NULL;
++    int read=0,timeouts=0;
++    while(read<req->content_len) {
++        int n=httpd_req_recv(req,body+read,req->content_len-read);
++        if(n==HTTPD_SOCK_ERR_TIMEOUT && ++timeouts<=2)continue;
++        if(n<=0){free(body);return NULL;}
++        read+=n;
++    }
++    body[read]=0;
++    if (!camera_json_body_valid(body,(size_t)read)) { free(body); return NULL; }
++    cJSON *json=cJSON_ParseWithLengthOpts(body,read+1,NULL,true);
++    free(body);
++    if(!cJSON_IsObject(json)){cJSON_Delete(json);return NULL;}
++    // Duplicate keys are ambiguous: reject rather than silently apply one copy.
++    cJSON *a,*b;
++    cJSON_ArrayForEach(a,json) for(b=a->next;b;b=b->next)
++        if(!strcmp(a->string,b->string)){cJSON_Delete(json);return NULL;}
++    return json;
++}
++static esp_err_t settings_handler(httpd_req_t *req)
++{
++    if(req->method==HTTP_GET) {
++        if(!camera_runtime_lock(2000))return busy_response(req);
++        cJSON *json=settings_json();camera_runtime_unlock();return send_json(req,json);
++    }
++    cJSON *json=read_json(req);
++    if(!json)return httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"Expected one JSON object (max 1536 bytes)");
++    if(!camera_runtime_lock(2000)){cJSON_Delete(json);return busy_response(req);}
++    camera_settings_t old=s_settings,next=old;
++    bool valid=camera_settings_patch(&next,json);cJSON_Delete(json);
++    if(!valid){camera_runtime_unlock();return httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"Unknown field, type, or range; see /settings");}
++    if(!camera_settings_transaction(&s_settings,&next,&s_sensor_consistent,&s_persisted,
++            apply_settings_io,save_settings_io,NULL)) {
++        camera_runtime_unlock();
++        return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Apply/save failed; query /api/status before continuing");
++    }
++    cJSON *response=cJSON_CreateObject();
++    cJSON_AddBoolToObject(response,"ok",true);cJSON_AddBoolToObject(response,"saved",true);
++    cJSON_AddItemToObject(response,"settings",settings_json());
++    camera_runtime_unlock();return send_json(req,response);
++}
++static void restart_wifi(void *unused)
++{
++    (void)unused;vTaskDelay(pdMS_TO_TICKS(1500));esp_restart();
++}
++static esp_err_t wifi_handler(httpd_req_t *req)
++{
++    cJSON *root=read_json(req);
++    if(!root)return httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"Expected JSON {ssid,password}");
++    const cJSON *ssid=cJSON_GetObjectItemCaseSensitive(root,"ssid");
++    const cJSON *password=cJSON_GetObjectItemCaseSensitive(root,"password");
++    bool valid=cJSON_GetArraySize(root)==2 && cJSON_IsString(ssid) && cJSON_IsString(password);
++    esp_err_t err=valid?wifi_manager_save_sta(ssid->valuestring,password->valuestring):ESP_ERR_INVALID_ARG;
++    cJSON_Delete(root);
++    if(err!=ESP_OK)return httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"Invalid Wi-Fi configuration or NVS save failed");
++    if(xTaskCreate(restart_wifi,"wifi_restart",2048,NULL,5,NULL)!=pdPASS)
++        return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Wi-Fi saved; restart manually to apply");
++    httpd_resp_set_type(req,"application/json; charset=utf-8");
++    return httpd_resp_sendstr(req,"{\"ok\":true,\"saved\":true,\"restarting\":true}");
++}
++static esp_err_t settings_page(httpd_req_t *req)
++{
++    static const char page[]=
++    "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
++    "<title>相机运行参数</title><style>body{font:16px sans-serif;max-width:760px;margin:30px auto;padding:16px}"
++    "textarea{width:100%;height:330px}button{padding:10px;margin:10px 0}pre{white-space:pre-wrap}</style>"
++    "<h1>相机运行参数</h1><p><a href='/'>Wi-Fi 配置</a> · <a href='/api/status'>版本与同步状态</a></p>"
++    "<p>修改 JSON 后保存，立即应用并存入 NVS。resolution: 160x120 / 320x240 / 640x480 / 800x600 / 1024x768 / 1280x1024 / 1600x1200。"
++    "fps: 1–30（图传上限）；jpeg_quality: 4–63（越小质量越高）。</p>"
++    "<p>auto_exposure / auto_white_balance / auto_gain: true 或 false。exposure: 0–1200（传感器寄存器单位，非微秒，仅手动曝光时应用）；"
++    "exposure_level: -2–2；gain: 0–30（仅手动增益时应用）。white_balance_mode: 0 自动、1 晴天、2 阴天、3 办公室、4 家居。"
++    "手动白平衡请设 auto_white_balance=false 并选择1–4；自动请设true和0。</p>"
++    "<textarea id=cfg spellcheck=false></textarea><br><button id=save>应用并保存</button><pre id=result></pre>"
++    "<script>fetch('/api/settings').then(r=>r.json()).then(s=>cfg.value=JSON.stringify(s,null,2));"
++    "save.onclick=async()=>{try{const body=JSON.stringify(JSON.parse(cfg.value));const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body});result.textContent=r.status+' '+await r.text()}catch(e){result.textContent=String(e)}};</script>";
++    httpd_resp_set_type(req,"text/html; charset=utf-8");
++    return httpd_resp_sendstr(req,page);
++}
++esp_err_t camera_runtime_register_http(httpd_handle_t server)
++{
++    const httpd_uri_t uris[]={
++        {.uri="/api/status",.method=HTTP_GET,.handler=status_handler},
++        {.uri="/api/settings",.method=HTTP_GET,.handler=settings_handler},
++        {.uri="/api/settings",.method=HTTP_POST,.handler=settings_handler},
++        {.uri="/api/wifi",.method=HTTP_POST,.handler=wifi_handler},
++        {.uri="/settings",.method=HTTP_GET,.handler=settings_page}
++    };
++    for(size_t i=0;i<sizeof(uris)/sizeof(uris[0]);i++) {
++        esp_err_t err=httpd_register_uri_handler(server,&uris[i]);
++        if(err!=ESP_OK)return err;
++    }
++    return ESP_OK;
++}
+diff --git a/main/camera_runtime.h b/main/camera_runtime.h
+new file mode 100644
+index 0000000..a356307
+--- /dev/null
++++ b/main/camera_runtime.h
+@@ -0,0 +1,15 @@
++#pragma once
++#include <stdbool.h>
++#include <stdint.h>
++#include "esp_err.h"
++#include "esp_http_server.h"
++
++#define CAMERA_FIRMWARE_VERSION "2026.11.16-runtime1"
++#define CAMERA_SNTP_SERVER "10.1.1.249"
++esp_err_t camera_runtime_init(void);
++esp_err_t camera_runtime_register_http(httpd_handle_t server);
++bool camera_runtime_lock(uint32_t timeout_ms);
++void camera_runtime_unlock(void);
++int camera_runtime_get_fps(void);
++bool camera_runtime_stream_ready(void);
++void camera_runtime_time_start(void);
+diff --git a/main/camera_settings.c b/main/camera_settings.c
+new file mode 100644
+index 0000000..97563b9
+--- /dev/null
++++ b/main/camera_settings.c
+@@ -0,0 +1,56 @@
++#include "camera_settings.h"
++#include <string.h>
++#ifdef ESP_PLATFORM
++#include "sdkconfig.h"
++#else
++#define CONFIG_CAMERA_STREAM_FPS 5
++#endif
++const char *const camera_resolution_names[] = {
++    "160x120", "320x240", "640x480", "800x600", "1024x768", "1280x1024", "1600x1200"
++};
++void camera_settings_defaults(camera_settings_t *s)
++{
++    *s = (camera_settings_t){.schema=CAMERA_SETTINGS_SCHEMA, .fps=CONFIG_CAMERA_STREAM_FPS, .jpeg_quality=12,
++        .resolution=2, .auto_exposure=1, .exposure=300, .exposure_level=0,
++        .auto_white_balance=1, .white_balance_mode=0, .auto_gain=1, .gain=0};
++}
++static bool boolean(int32_t n) { return n == 0 || n == 1; }
++bool camera_settings_valid(const camera_settings_t *s)
++{
++    return s && s->schema == CAMERA_SETTINGS_SCHEMA && s->fps >= 1 && s->fps <= 30 &&
++        s->jpeg_quality >= 4 && s->jpeg_quality <= 63 && s->resolution >= 0 &&
++        s->resolution < CAMERA_RESOLUTION_COUNT && boolean(s->auto_exposure) &&
++        s->exposure >= 0 && s->exposure <= 1200 && s->exposure_level >= -2 &&
++        s->exposure_level <= 2 && boolean(s->auto_white_balance) &&
++        s->white_balance_mode >= 0 && s->white_balance_mode <= 4 &&
++        ((s->auto_white_balance && s->white_balance_mode == 0) ||
++         (!s->auto_white_balance && s->white_balance_mode >= 1)) &&
++        boolean(s->auto_gain) && s->gain >= 0 && s->gain <= 30;
++}
++int camera_resolution_index(const char *name)
++{
++    if (!name) return -1;
++    for (int i=0; i<CAMERA_RESOLUTION_COUNT; i++)
++        if (!strcmp(name,camera_resolution_names[i])) return i;
++    return -1;
++}
++
++bool camera_settings_transaction(camera_settings_t *current,const camera_settings_t *next,
++    bool *sensor_consistent,bool *persisted,camera_settings_io_fn apply,
++    camera_settings_io_fn save,void *context)
++{
++    if (!camera_settings_valid(next) || !apply || !save) return false;
++    if (!apply(next,context)) {
++        *sensor_consistent=apply(current,context);
++        return false;
++    }
++    if (!save(next,context)) {
++        *sensor_consistent=apply(current,context);
++        *persisted=save(current,context);
++        return false;
++    }
++    *current=*next;
++    *sensor_consistent=true;
++    *persisted=true;
++    return true;
++}
+diff --git a/main/camera_settings.h b/main/camera_settings.h
+new file mode 100644
+index 0000000..cf45b9b
+--- /dev/null
++++ b/main/camera_settings.h
+@@ -0,0 +1,26 @@
++#pragma once
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++typedef struct {
++    uint32_t schema;
++    int32_t fps, jpeg_quality, resolution;
++    int32_t auto_exposure, exposure, exposure_level;
++    int32_t auto_white_balance, white_balance_mode;
++    int32_t auto_gain, gain;
++} camera_settings_t;
++
++#define CAMERA_SETTINGS_SCHEMA 1
++#define CAMERA_RESOLUTION_COUNT 7
++extern const char *const camera_resolution_names[CAMERA_RESOLUTION_COUNT];
++void camera_settings_defaults(camera_settings_t *settings);
++bool camera_settings_valid(const camera_settings_t *settings);
++int camera_resolution_index(const char *name);
++
++typedef bool (*camera_settings_io_fn)(const camera_settings_t *settings,void *context);
++// Keep the published settings unchanged until sensor apply and NVS save succeed.
++// A failed apply restores sensor state; failed persistence also rewrites old NVS.
++bool camera_settings_transaction(camera_settings_t *current,const camera_settings_t *next,
++    bool *sensor_consistent,bool *persisted,camera_settings_io_fn apply,
++    camera_settings_io_fn save,void *context);
+diff --git a/main/camera_settings_json.c b/main/camera_settings_json.c
+new file mode 100644
+index 0000000..8585813
+--- /dev/null
++++ b/main/camera_settings_json.c
+@@ -0,0 +1,37 @@
++#include "camera_settings_json.h"
++#include <math.h>
++#include <string.h>
++bool camera_settings_patch(camera_settings_t *next,const cJSON *json)
++{
++    if (!cJSON_IsObject(json) || !next) return false;
++    const cJSON *a,*b;
++    cJSON_ArrayForEach(a,json) for(b=a->next;b;b=b->next)
++        if(!strcmp(a->string,b->string))return false;
++    const cJSON *item;
++    cJSON_ArrayForEach(item,json) {
++        const char *key=item->string;
++#define NUMBER(name) if(!strcmp(key,#name)) {if(!cJSON_IsNumber(item)||!isfinite(item->valuedouble)||floor(item->valuedouble)!=item->valuedouble||fabs(item->valuedouble)>100000)return false;next->name=(int32_t)item->valuedouble;continue;}
++#define BOOL(name) if(!strcmp(key,#name)) {if(!cJSON_IsBool(item))return false;next->name=cJSON_IsTrue(item);continue;}
++        NUMBER(fps);NUMBER(jpeg_quality);NUMBER(exposure);NUMBER(exposure_level);
++        NUMBER(white_balance_mode);NUMBER(gain);
++        BOOL(auto_exposure);BOOL(auto_white_balance);BOOL(auto_gain);
++#undef BOOL
++#undef NUMBER
++        if(!strcmp(key,"resolution")) {
++            if(!cJSON_IsString(item))return false;
++            next->resolution=camera_resolution_index(item->valuestring);continue;
++        }
++        return false;
++    }
++    return camera_settings_valid(next);
++}
++
++bool camera_json_body_valid(const char *body,size_t length)
++{
++    if (!body || !length || memchr(body,0,length)) return false;
++    // cJSON represents strings with C NUL terminators; reject embedded NULs
++    // instead of silently truncating Wi-Fi names or accepting a hidden suffix.
++    for(size_t i=0;i+6<=length;i++)
++        if(!memcmp(body+i,"\\u0000",6))return false;
++    return true;
++}
+diff --git a/main/camera_settings_json.h b/main/camera_settings_json.h
+new file mode 100644
+index 0000000..2a09b76
+--- /dev/null
++++ b/main/camera_settings_json.h
+@@ -0,0 +1,6 @@
++#pragma once
++#include "camera_settings.h"
++#include "cJSON.h"
++bool camera_settings_patch(camera_settings_t *next,const cJSON *json);
++
++bool camera_json_body_valid(const char *body,size_t length);
+diff --git a/tests/README.txt b/tests/README.txt
+new file mode 100644
+index 0000000..980b7a0
+--- /dev/null
++++ b/tests/README.txt
+@@ -0,0 +1,19 @@
++MJPEG source stream host regression tests
++
++Run: bash tests/run_stream_tests.sh
++
++The C test includes the actual main/web_mjpeg.c, registers its real HTTP
++handler, and drives it with deterministic camera/HTTP/FreeRTOS stubs.
++It checks 5 FPS send cadence, send/capture delays, early tick wakeups,
++buffer ownership during waits, and all HTTP send error branches.
++
++These tests do not exercise ESP32 hardware, radio throughput, sensor capture
++freshness, USB flashing, or actual wall-clock FPS. Firmware build and
++on-device stream measurements remain separate checks.
++
++Runtime parameter release:
++  bash tests/run_settings_tests.sh
++Requires the cJSON source included in ESP-IDF; set IDF_PATH if needed.
++Covers configuration bounds/schema, sensor/NVS rollback and JSON patches.
++Stream tests additionally verify the mutex is released and FPS updates take effect.
++No hardware or serial connection is used by these host tests.
+diff --git a/tests/run_settings_tests.sh b/tests/run_settings_tests.sh
+new file mode 100755
+index 0000000..0fd99f2
+--- /dev/null
++++ b/tests/run_settings_tests.sh
+@@ -0,0 +1,14 @@
++#!/usr/bin/env bash
++set -euo pipefail
++test_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
++build_dir="$(mktemp -d /tmp/maturo-settings-test.XXXXXX)"
++trap 'rm -rf -- "$build_dir"' EXIT
++"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -pedantic \
++    "$test_dir/test_camera_settings.c" "$test_dir/../main/camera_settings.c" -o "$build_dir/settings"
++"$build_dir/settings"
++# cJSON source is bundled with ESP-IDF; provide IDF_PATH when outside this machine.
++cjson_dir="${IDF_PATH:-/tmp/leap_firmware_toolchain/esp-idf}/components/json/cJSON"
++"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -I "$cjson_dir" \
++    "$test_dir/test_settings_json.c" "$test_dir/../main/camera_settings.c" \
++    "$test_dir/../main/camera_settings_json.c" "$cjson_dir/cJSON.c" -lm -o "$build_dir/json"
++"$build_dir/json"
+diff --git a/tests/run_stream_tests.sh b/tests/run_stream_tests.sh
+new file mode 100644
+index 0000000..d1fc0e0
+--- /dev/null
++++ b/tests/run_stream_tests.sh
+@@ -0,0 +1,9 @@
++#!/usr/bin/env bash
++set -euo pipefail
++test_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
++test_build_dir="$(mktemp -d /tmp/maturo-stream-test.XXXXXX)"
++trap 'rm -rf -- "$test_build_dir"' EXIT
++"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -pedantic \
++    -I "$test_dir/stubs" "$test_dir/test_mjpeg_stream.c" \
++    -o "$test_build_dir/test_mjpeg_stream"
++"$test_build_dir/test_mjpeg_stream"
+diff --git a/tests/stubs/esp_camera.h b/tests/stubs/esp_camera.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/esp_camera.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/esp_err.h b/tests/stubs/esp_err.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/esp_err.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/esp_http_server.h b/tests/stubs/esp_http_server.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/esp_http_server.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/esp_log.h b/tests/stubs/esp_log.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/esp_log.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/esp_timer.h b/tests/stubs/esp_timer.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/esp_timer.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/freertos/FreeRTOS.h b/tests/stubs/freertos/FreeRTOS.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/freertos/FreeRTOS.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/freertos/task.h b/tests/stubs/freertos/task.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/freertos/task.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/sdkconfig.h b/tests/stubs/sdkconfig.h
+new file mode 100644
+index 0000000..02f98f8
+--- /dev/null
++++ b/tests/stubs/sdkconfig.h
+@@ -0,0 +1 @@
++#include "test_esp.h"
+diff --git a/tests/stubs/test_esp.h b/tests/stubs/test_esp.h
+new file mode 100644
+index 0000000..8bb2306
+--- /dev/null
++++ b/tests/stubs/test_esp.h
+@@ -0,0 +1,52 @@
++#pragma once
++
++#include <assert.h>
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++typedef int esp_err_t;
++#define ESP_OK 0
++#define ESP_FAIL (-1)
++#define ESP_ERROR_CHECK(value) assert((value) == ESP_OK)
++#define ESP_LOGI(tag, ...) ((void)(tag))
++#define ESP_LOGE(tag, ...) ((void)(tag))
++#define ESP_LOGW(tag, ...) ((void)(tag))
++
++typedef uint32_t TickType_t;
++#define configTICK_RATE_HZ 100
++#define CONFIG_CAMERA_STREAM_FPS 5
++void vTaskDelay(TickType_t ticks);
++int64_t esp_timer_get_time(void);
++
++#define PIXFORMAT_JPEG 4
++typedef struct {
++    uint8_t *buf;
++    size_t len;
++    int format;
++} camera_fb_t;
++camera_fb_t *esp_camera_fb_get(void);
++void esp_camera_fb_return(camera_fb_t *fb);
++
++typedef struct { int unused; } httpd_req_t;
++typedef void *httpd_handle_t;
++typedef struct {
++    unsigned server_port;
++    unsigned ctrl_port;
++    unsigned max_uri_handlers;
++    unsigned stack_size;
++    unsigned send_wait_timeout;
++} httpd_config_t;
++#define HTTPD_DEFAULT_CONFIG() ((httpd_config_t){0})
++#define HTTP_GET 0
++typedef struct {
++    const char *uri;
++    int method;
++    esp_err_t (*handler)(httpd_req_t *);
++    void *user_ctx;
++} httpd_uri_t;
++esp_err_t httpd_resp_set_type(httpd_req_t *req, const char *type);
++esp_err_t httpd_resp_set_hdr(httpd_req_t *req, const char *name, const char *value);
++esp_err_t httpd_resp_send_chunk(httpd_req_t *req, const char *data, size_t len);
++esp_err_t httpd_start(httpd_handle_t *server, const httpd_config_t *config);
++esp_err_t httpd_register_uri_handler(httpd_handle_t server, const httpd_uri_t *uri);
+diff --git a/tests/test_camera_settings.c b/tests/test_camera_settings.c
+new file mode 100644
+index 0000000..c191008
+--- /dev/null
++++ b/tests/test_camera_settings.c
+@@ -0,0 +1,51 @@
++#include <assert.h>
++#include <stdio.h>
++#include <string.h>
++#include "../main/camera_settings.h"
++
++typedef struct {int applies,saves;bool fail_apply,fail_save,fail_rollback;camera_settings_t last_applied,last_saved;} io_t;
++static bool apply(const camera_settings_t *s,void *ctx) {
++    io_t *io=ctx;io->last_applied=*s;io->applies++;
++    return !(io->fail_apply && io->applies==1) && !(io->fail_rollback && io->applies>1);
++}
++static bool save(const camera_settings_t *s,void *ctx) {
++    io_t *io=ctx;io->last_saved=*s;io->saves++;
++    return !(io->fail_save && io->saves==1) && !(io->fail_rollback && io->saves>1);
++}
++int main(void) {
++    camera_settings_t defaults;camera_settings_defaults(&defaults);assert(camera_settings_valid(&defaults));
++    camera_settings_t s=defaults;
++#define BAD(field,value) do{s=defaults;s.field=value;assert(!camera_settings_valid(&s));}while(0)
++    BAD(fps,0);BAD(fps,31);BAD(jpeg_quality,3);BAD(jpeg_quality,64);BAD(resolution,-1);BAD(resolution,7);
++    BAD(auto_exposure,2);BAD(auto_gain,-1);BAD(auto_white_balance,7);BAD(gain,31);BAD(exposure,1201);BAD(exposure,-1);
++    BAD(white_balance_mode,1);BAD(auto_white_balance,0);
++    s=defaults;s.auto_white_balance=0;s.white_balance_mode=2;assert(camera_settings_valid(&s));
++    BAD(exposure_level,3);BAD(exposure_level,-3);BAD(white_balance_mode,5);BAD(schema,99);
++#undef BAD
++    assert(camera_resolution_index("640x480")==2);assert(camera_resolution_index("640X480")==-1);
++    for(int i=0;i<CAMERA_RESOLUTION_COUNT;i++)assert(camera_resolution_index(camera_resolution_names[i])==i);
++    puts("PASS: defaults, parameter bounds, schema and resolution whitelist");
++    camera_settings_t next=defaults;next.fps=10;next.gain=12;next.auto_gain=0;
++    bool consistent=true,persisted=false;io_t io={0};s=defaults;
++    assert(camera_settings_transaction(&s,&next,&consistent,&persisted,apply,save,&io));
++    assert(s.fps==10 && consistent && persisted && io.applies==1 && io.saves==1);
++    puts("PASS: successful transaction applies, persists and publishes settings");
++    io=(io_t){.fail_apply=true};s=defaults;persisted=false;
++    assert(!camera_settings_transaction(&s,&next,&consistent,&persisted,apply,save,&io));
++    assert(!memcmp(&s,&defaults,sizeof(s))&&consistent&&!persisted&&io.applies==2&&io.saves==0);
++    assert(!memcmp(&io.last_applied,&defaults,sizeof(s)));
++    puts("PASS: partial sensor apply restores prior settings and never writes NVS");
++    io=(io_t){.fail_save=true};s=defaults;
++    assert(!camera_settings_transaction(&s,&next,&consistent,&persisted,apply,save,&io));
++    assert(!memcmp(&s,&defaults,sizeof(s))&&consistent&&persisted&&io.applies==2&&io.saves==2);
++    assert(!memcmp(&io.last_saved,&defaults,sizeof(s)));
++    puts("PASS: persistence failure restores both sensor and persisted record");
++    io=(io_t){.fail_save=true,.fail_rollback=true};s=defaults;
++    assert(!camera_settings_transaction(&s,&next,&consistent,&persisted,apply,save,&io));
++    assert(!consistent&&!persisted&&!memcmp(&s,&defaults,sizeof(s)));
++    puts("PASS: failed rollback is explicitly inconsistent and unsaved (stream must stop)");
++    io=(io_t){0};next.fps=0;
++    assert(!camera_settings_transaction(&s,&next,&consistent,&persisted,apply,save,&io));
++    assert(io.applies==0&&io.saves==0);
++    puts("PASS: invalid transaction never touches hardware or NVS");
++}
+diff --git a/tests/test_mjpeg_stream.c b/tests/test_mjpeg_stream.c
+new file mode 100644
+index 0000000..5bbbd46
+--- /dev/null
++++ b/tests/test_mjpeg_stream.c
+@@ -0,0 +1,224 @@
++// Compile the production handler itself against deterministic hardware stubs.
++#include <stdio.h>
++#include <string.h>
++#include "test_esp.h"
++#include "../main/web_mjpeg.c"
++
++enum { MAX_FRAMES = 32 };
++static struct {
++    int64_t now_us;
++    int64_t starts[MAX_FRAMES];
++    int64_t capture_delay[MAX_FRAMES];
++    int64_t payload_delay[MAX_FRAMES];
++    int captures, returns, boundaries, completed, delays;
++    int max_completed, phase, fail_phase, fail_capture;
++    bool held, early_wake, type_failure, fps_header, locked;
++    int fps, change_fps_after_frame;
++    uint8_t jpeg[4];
++    camera_fb_t fb;
++    esp_err_t (*handler)(httpd_req_t *);
++} fake;
++
++static void reset_fake(void)
++{
++    memset(&fake, 0, sizeof(fake));
++    fake.now_us = 1000000;
++    fake.max_completed = 4;
++    fake.fps = 5;
++    fake.fail_phase = -1;
++    fake.fail_capture = -1;
++    fake.jpeg[0] = 0xff;
++    fake.jpeg[1] = 0xd8;
++    fake.jpeg[2] = 0xff;
++    fake.jpeg[3] = 0xd9;
++    fake.fb = (camera_fb_t){fake.jpeg, sizeof(fake.jpeg), PIXFORMAT_JPEG};
++}
++
++bool camera_runtime_lock(uint32_t timeout_ms) { (void)timeout_ms; assert(!fake.locked); fake.locked=true; return true; }
++void camera_runtime_unlock(void) { assert(fake.locked); assert(!fake.held); fake.locked=false; }
++int camera_runtime_get_fps(void) { assert(fake.locked); return fake.fps; }
++bool camera_runtime_stream_ready(void) { assert(fake.locked); return true; }
++int64_t esp_timer_get_time(void) { return fake.now_us; }
++
++void vTaskDelay(TickType_t ticks)
++{
++    // Holding a framebuffer while sleeping would starve the camera queue.
++    assert(!fake.held);
++    assert(!fake.locked);
++    assert(ticks > 0);
++    ++fake.delays;
++    int64_t elapsed = (int64_t)ticks * 10000;
++    if (fake.early_wake && fake.delays == 1) elapsed -= 5000;
++    assert(elapsed > 0);
++    fake.now_us += elapsed;
++}
++
++camera_fb_t *esp_camera_fb_get(void)
++{
++    assert(!fake.held);
++    assert(fake.locked);
++    assert(fake.captures < MAX_FRAMES);
++    int index = fake.captures++;
++    fake.now_us += fake.capture_delay[index];
++    if (index == fake.fail_capture) return NULL;
++    fake.held = true;
++    return &fake.fb;
++}
++
++void esp_camera_fb_return(camera_fb_t *fb)
++{
++    assert(fb == &fake.fb);
++    assert(fake.held);
++    fake.held = false;
++    ++fake.returns;
++}
++
++esp_err_t httpd_resp_set_type(httpd_req_t *req, const char *type)
++{
++    (void)req;
++    assert(strcmp(type, "multipart/x-mixed-replace;boundary=frame") == 0);
++    return fake.type_failure ? ESP_FAIL : ESP_OK;
++}
++
++esp_err_t httpd_resp_set_hdr(httpd_req_t *req, const char *name, const char *value)
++{
++    (void)req;
++    if (strcmp(name, "X-Camera-Stream-FPS") == 0) {
++        assert(strcmp(value, "5") == 0);
++        fake.fps_header = true;
++    }
++    return ESP_OK;
++}
++
++esp_err_t httpd_resp_send_chunk(httpd_req_t *req, const char *data, size_t len)
++{
++    (void)req;
++    assert(fake.held);
++    if (fake.phase == 0) {
++        assert(len == strlen("\r\n--frame\r\n"));
++        assert(memcmp(data, "\r\n--frame\r\n", len) == 0);
++        assert(fake.boundaries < MAX_FRAMES);
++        fake.starts[fake.boundaries++] = fake.now_us;
++        // A deterministic client disconnect terminates the production loop.
++        if (fake.completed >= fake.max_completed) return ESP_FAIL;
++    } else if (fake.phase == 1) {
++        assert(len == strlen("Content-Type: image/jpeg\r\n\r\n"));
++        assert(memcmp(data, "Content-Type: image/jpeg\r\n\r\n", len) == 0);
++    } else {
++        assert(data == (const char *)fake.fb.buf);
++        assert(len == fake.fb.len);
++        fake.now_us += fake.payload_delay[fake.completed];
++    }
++    if (fake.phase == fake.fail_phase) return ESP_FAIL;
++    if (++fake.phase == 3) {
++        fake.phase = 0;
++        ++fake.completed;
++        if (fake.completed == 1 && fake.change_fps_after_frame) fake.fps = fake.change_fps_after_frame;
++    }
++    return ESP_OK;
++}
++
++esp_err_t httpd_start(httpd_handle_t *server, const httpd_config_t *config)
++{
++    assert(config->server_port == 81);
++    *server = &fake;
++    return ESP_OK;
++}
++
++esp_err_t httpd_register_uri_handler(httpd_handle_t server, const httpd_uri_t *uri)
++{
++    assert(server == &fake);
++    assert(strcmp(uri->uri, "/") == 0 && uri->method == HTTP_GET);
++    fake.handler = uri->handler;
++    return ESP_OK;
++}
++
++static void run_handler(void)
++{
++    httpd_req_t req = {0};
++    assert(start_webserver() == &fake);
++    assert(fake.handler != NULL);
++    assert(fake.handler(&req) == ESP_FAIL);
++    assert(!fake.held);
++}
++
++static void check_intervals(void)
++{
++    for (int i = 1; i < fake.boundaries; ++i) {
++        assert(fake.starts[i] - fake.starts[i - 1] >= 200000);
++    }
++}
++
++int main(void)
++{
++    reset_fake();
++    for (int i = 0; i < MAX_FRAMES; ++i) fake.payload_delay[i] = 20000;
++    run_handler();
++    assert(fake.fps_header && fake.completed == 4);
++    assert(fake.captures == fake.returns);
++    for (int i = 0; i < fake.boundaries; ++i) {
++        // The 20 ms send time must be included, not added to a 200 ms sleep.
++        assert(fake.starts[i] == 1000000 + i * 200000);
++    }
++    puts("PASS: 5 FPS cadence includes send time; waits hold no frame");
++
++    reset_fake();
++    fake.payload_delay[0] = 450000;
++    fake.payload_delay[1] = 10000;
++    run_handler();
++    check_intervals();
++    assert(fake.starts[1] == 1450000);
++    assert(fake.starts[2] == 1650000);
++    assert(fake.captures == fake.returns);
++    puts("PASS: slow network resets cadence without catch-up bursts");
++
++    reset_fake();
++    fake.early_wake = true;
++    run_handler();
++    check_intervals();
++    assert(fake.delays > fake.completed);
++    assert(fake.starts[1] == 1205000);
++    puts("PASS: early tick wake is rechecked before sending");
++
++    reset_fake();
++    fake.capture_delay[0] = 60000;
++    fake.capture_delay[2] = 300000;
++    run_handler();
++    check_intervals();
++    assert(fake.starts[0] == 1060000);
++    assert(fake.starts[1] == 1260000);
++    assert(fake.starts[2] == 1760000);
++    assert(fake.starts[3] == 1960000);
++    puts("PASS: varying capture latency cannot shorten send intervals");
++
++    for (int phase = 0; phase < 3; ++phase) {
++        reset_fake();
++        fake.fail_phase = phase;
++        run_handler();
++        assert(fake.captures == 1 && fake.returns == 1 && fake.completed == 0);
++    }
++    puts("PASS: boundary, header, and payload failures return the frame exactly once");
++
++    reset_fake();
++    fake.fail_capture = 0;
++    run_handler();
++    assert(fake.returns == 0 && fake.boundaries == 0);
++    reset_fake();
++    fake.jpeg[0] = 0;
++    run_handler();
++    assert(fake.returns == 1 && fake.boundaries == 0);
++    reset_fake();
++    fake.type_failure = true;
++    run_handler();
++    assert(fake.captures == 0);
++    puts("PASS: capture, invalid JPEG, and HTTP setup failures release resources");
++    reset_fake();
++    fake.change_fps_after_frame = 2;
++    run_handler();
++    assert(fake.starts[1] - fake.starts[0] == 200000);
++    assert(fake.starts[2] - fake.starts[1] == 500000);
++    assert(fake.starts[3] - fake.starts[2] == 500000);
++    assert(!fake.locked && !fake.held);
++    puts("PASS: runtime FPS change is used by next frame; mutex released on disconnect");
++    return 0;
++}
+diff --git a/tests/test_settings_json.c b/tests/test_settings_json.c
+new file mode 100644
+index 0000000..0fe923b
+--- /dev/null
++++ b/tests/test_settings_json.c
+@@ -0,0 +1,25 @@
++#include <assert.h>
++#include <stdio.h>
++#include "../main/camera_settings_json.h"
++static bool patch(const char *text,camera_settings_t *s) {
++    cJSON *json=cJSON_Parse(text);bool okay=camera_settings_patch(s,json);cJSON_Delete(json);return okay;
++}
++int main(void) {
++    const char raw_nul[]="{\"fps\":5}\0{\"bad\":0}";
++    const char encoded_nul[]="{\"ssid\":\"a\\u0000b\"}";
++    assert(!camera_json_body_valid(raw_nul,sizeof(raw_nul)-1));
++    assert(!camera_json_body_valid(encoded_nul,sizeof(encoded_nul)-1));
++    assert(camera_json_body_valid("{\"fps\":5}",9));
++    assert(!camera_json_body_valid(NULL,0));
++    camera_settings_t settings;camera_settings_defaults(&settings);
++    assert(patch("{\"fps\":10,\"auto_gain\":false,\"gain\":15,\"resolution\":\"320x240\"}",&settings));
++    assert(settings.fps==10&&settings.auto_gain==0&&settings.gain==15&&settings.resolution==1);
++    const char *bad[]={"{\"fps\":0}","{\"fps\":2.5}","{\"fps\":\"5\"}","{\"auto_gain\":1}",
++        "{\"unknown\":1}","{\"resolution\":\"999x999\"}","{\"fps\":5,\"fps\":10}","[]","null","{\"fps\":1e100}",
++        "{\"auto_white_balance\":false}","{\"white_balance_mode\":3}"};
++    for(size_t i=0;i<sizeof(bad)/sizeof(bad[0]);i++){camera_settings_defaults(&settings);assert(!patch(bad[i],&settings));}
++    camera_settings_defaults(&settings);
++    assert(patch("{\"auto_white_balance\":false,\"white_balance_mode\":3}",&settings));
++    assert(patch("{\"auto_white_balance\":true,\"white_balance_mode\":0}",&settings));
++    puts("PASS: JSON partial updates, type/range/unknown/duplicate rejection and WB mode consistency");
++}

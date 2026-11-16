@@ -1,0 +1,182 @@
+Maturo 小车相机约 5 FPS 固件：跨电脑刷写包
+版本日期：2026-11-16
+
+一、这个包做什么
+
+给同批 Maturo ESP32-S3 独立相机刷入已在 11 号车验证的应用固件。
+相机端 MJPEG 发送起点间隔至少 200 ms，分辨率保持 640×480、JPEG 质量参数 12。
+传感器仍可持续采集；这是网络图传限频，不是把曝光频率设置成 5 Hz。
+11 号车实测约 4.78 FPS、1.176 Mbps（单路、30 秒、当时画面和网络条件）。
+实际帧率可低于 5 FPS。它不能单独保证 20 路视觉识别或控制的实时性。
+
+其他电脑不需要 ROS、ESP-IDF 或编译器。需要 Python 3.10 及以上、可传数据的
+USB 线，以及首次安装 Python 依赖时的网络连接。建议使用 Python 3.10～3.12。
+脚本采用 Windows/Linux 通用 Python 接口；当前离线测试在 Linux 完成，
+没有在 Windows 实机运行，也没有用新打包脚本再刷一次 11 号车。
+包内固件与 11 号车已刷入、已校验的固件完全相同。
+
+适用条件：同一相机板与引脚接线、ESP32-S3、8 MB 内置 PSRAM、4 MB Flash、
+原应用项目名 gc0308_http_stream、约定的双 OTA 分区，且安全启动/Flash 加密关闭。
+脚本会核对能从芯片和备份中读取的条件；USB 无法证明传感器引脚接线一致。
+不同批次或改装相机不能仅凭“ESP32-S3”认定兼容。11 号实测传感器是 OV2640；
+项目名中的 gc0308 不代表已经确认每台车的实际传感器型号。
+
+二、先记录车号和相机身份
+
+1. 给目标车上电，在其底盘管理页或以下地址读取状态：
+     http://底盘IP/api/status
+   找 camera.name、camera.stream_url 和 camera.ip。
+   相机名形如 Maturo_CAM_XXXXXXXXXXXX，后 12 位是相机的 MAC。
+   不要使用底盘自身的 Maturo_... 名称。每辆车记录自己的相机名称。
+
+2. 把 USB 线接到独立相机模块的 USB 口。底盘和相机是不同的控制器。
+   一次连接一台目标相机，关闭占用该串口的监视器、IDE 等程序。
+   刷写脚本会要求相机 MAC 与 --expect-mac 一致，并检查原应用项目名。
+   ports 命令只能显示电脑发现的串口，不能代替车号与相机身份的核对。
+
+3. 把整个压缩包解压到可写目录。不要在 ZIP 预览界面里直接运行。
+   下列命令均在解压后的 camera_5fps 文件夹内执行。
+   COM5、/dev/ttyACM0、car12、XXXXXXXXXXXX 都要按实际情况替换；X 不是有效 MAC。
+
+三、Windows 操作（PowerShell）
+
+1. 安装 Python 3.10～3.12。打开 PowerShell，进入解压文件夹，例如：
+
+   cd "D:\camera_5fps"
+   py -3 --version
+   py -3 -m venv .venv
+   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+   如果没有 py 命令，但已安装 Python，可将上面两行的 py -3 换成 python。
+   不需要执行 Activate.ps1，也不需要修改 PowerShell 执行策略。
+
+2. 查看串口（也可以在设备管理器的“端口”中对照插拔前后的变化）：
+
+   .\.venv\Scripts\python.exe .\flash_camera.py ports
+
+3. 开始处理一台相机，例如 12 号车、COM5：
+
+   .\.venv\Scripts\python.exe .\flash_camera.py flash --port COM5 --car car12 --expect-mac Maturo_CAM_XXXXXXXXXXXX
+
+   按实际相机名称替换 Maturo_CAM_XXXXXXXXXXXX。也接受带冒号的 MAC 地址。
+   脚本先检查固件文件、读取芯片信息、完整备份，再检查分区和活动应用。
+   屏幕显示目标、备份位置和写入分区后，核对无误，输入大写 FLASH 并回车。
+   其他输入会取消写入。读取身份和备份期间，相机会暂时停止正常图传。
+
+四、Linux 操作
+
+1. 安装 Python 环境（Ubuntu/Debian）：
+
+   sudo apt-get install python3 python3-venv
+   cd "/解压位置/camera_5fps"
+   python3 --version
+   python3 -m venv .venv
+   .venv/bin/python -m pip install -r requirements.txt
+   .venv/bin/python flash_camera.py ports
+
+2. 若提示无权打开 /dev/ttyACM0，可对当前设备临时授予权限：
+
+   sudo setfacl -m u:"$(id -un)":rw /dev/ttyACM0
+
+   将设备名改为 ports 列出的端口。没有 setfacl 时先安装 acl 软件包。
+   USB 重插或重新枚举后，临时 ACL 可能失效，需要重新执行。
+   不要用 sudo 运行整个 Python 刷写脚本。
+
+3. 刷写一台相机：
+
+   .venv/bin/python flash_camera.py flash --port /dev/ttyACM0 --car car12 --expect-mac Maturo_CAM_XXXXXXXXXXXX
+
+   按实际车号、端口、相机名称替换参数，检查摘要后输入 FLASH。
+   也可以用 /dev/serial/by-id/ 下该相机的稳定设备路径作为 --port。
+
+五、脚本的写入范围与备份
+
+每次执行会创建独立备份目录，默认放在本包 backups/ 中；可用
+--backup-root 指定其他位置，例如移动硬盘上的目录。
+完整备份、备份校验值、原应用、身份/分区记录和执行结果保存在对应目录。
+备份包含该车自己的 Wi-Fi 等设置，请单独保管，不要混入发给别人的刷写包。
+
+脚本解析实际 OTA 选择数据，确认当前启动的是 ota_0 还是 ota_1，
+把应用镜像后方补为擦除值 0xFF，写满这一活动应用分区（1.5 MiB），
+清除该槽中可能遗留的旧应用尾部。不会固定假设所有车都从 0x20000 启动。
+写入后用 esptool 校验应用，并回读 0x00000～0x1FFFF 区域与原备份对比，
+确认启动程序、分区表、NVS 和 OTA 选择数据未被这次写入修改，再重启。
+相机正常启动后可能自行更新 NVS 中的运行或校准数据，这属于固件运行行为。
+
+不执行整片擦除，不复制 11 号车的 Wi-Fi 配置到其他车。
+不要把 firmware/camera_5fps_app.bin 当作整片镜像写入地址 0。
+校验失败、芯片/MAC 不符、分区不符、OTA 状态不明确时停止，保留输出与备份。
+若写入失败，脚本不会主动启动可能不完整的应用；使用本车备份恢复。
+读取检查阶段取消或失败后，相机可能留在下载模式；未开始写入时可重新上电。
+
+六、刷完后验证图传
+
+1. 给车辆正常上电，等待相机连上它原来配置的 Wi-Fi。
+   刷写电脑在其他网络时仍可通过 USB 刷写，但不能直接访问车上视频服务。
+   验证视频时，电脑需要能访问相机所在局域网。
+
+2. 再读底盘 http://底盘IP/api/status，获取当前 camera.stream_url。
+   IP 可能随 DHCP 改变，不能把某台车之前用过的 IP 当成固定身份。
+
+3. 关闭浏览器中的视频页和 ROS 视频订阅节点，只保留一个视频客户端。
+   在 Windows 中执行（替换相机IP）：
+
+   .\.venv\Scripts\python.exe .\verify_stream.py --url http://相机IP:81/ --seconds 30
+
+   Linux 中执行：
+
+   .venv/bin/python verify_stream.py --url http://相机IP:81/ --seconds 30
+
+   正常输出 source_fps_header 为 "5"，received_fps 接近 5 或更低。
+   response_body_mbps 是该次采样的 HTTP 视频响应体码率，不含 Wi-Fi 等开销。
+   测量不主动限帧，不显示或解码画面；完整 multipart 帧在下一边界到达时计数。
+   这是接收端平均值，不是传感器曝光率或端到端控制时延。
+   HTTP 头表示固件报告的配置，不能代替写入校验。
+   若没有 "5" 响应头，脚本返回退出码 2；网络/格式错误返回 1。
+
+4. 关闭测量工具后，可以在浏览器打开 camera.stream_url 看画面。
+   每完成一辆，记录车号、相机 MAC、备份目录、刷写结果及实测 FPS，再处理下一辆。
+   可使用包内“刷写记录.csv”。首次批量操作建议先完成一辆的完整验证。
+
+七、恢复本车原来的应用
+
+找到该车本次刷写前的备份目录，接上同一相机 USB。
+Windows 示例：
+
+   .\.venv\Scripts\python.exe .\flash_camera.py restore --port COM5 --backup "backups\该车备份目录"
+
+Linux 示例：
+
+   .venv/bin/python flash_camera.py restore --port /dev/ttyACM0 --backup "backups/该车备份目录"
+
+工具检查备份校验值、相机 MAC 和现有分区/OTA 数据后，提示输入 RESTORE。
+恢复只写回该备份中的原应用，不覆盖整片 Flash，不回滚 NVS。
+不要使用其他车的备份。保留原始备份目录结构，不要手工改 backup.json 等记录。
+
+八、常见情况
+
+找不到串口：检查是否为数据线、USB 是否插在相机模块、设备管理器/ports 是否出现设备。
+无法连接：关闭占用串口的软件；如模块有 BOOT 和 RESET，按住 BOOT，按一下 RESET，
+再松开 BOOT 后重试。不同板子的按钮布局需要按实物确认。
+写入后未联网：先重新给相机上电，再从底盘状态查看当前 IP；检查原 Wi-Fi 是否可用。
+提示目标不兼容：保留错误输出，不通过删除检查、整片擦除或强制指定地址绕过。
+网络依赖安装失败：此包没有附带离线 Python 安装包或平台相关依赖，需要联网安装依赖。
+
+九、文件与来源
+
+firmware/camera_5fps_app.bin：唯一用于升级的应用镜像，980800 字节。
+SHA256：cae0bc8feff8b8c138cd1ec3e6a806dab082fa4e3417ced3e509b7fe9eac446d
+flash_camera.py / camera_layout.py：刷写流程与芯片/分区/应用格式检查。
+verify_stream.py：仅用 Python 标准库进行图传采样。
+requirements.txt：固定 esptool 4.13.0，避免不同大版本的命令差异。
+manifest.json：构建信息、已验证范围和固件参数。
+SHA256SUMS：包内文件校验清单；脚本也独立硬编码核对应用镜像的 SHA256。
+source/：作者仓库基础上的修改补丁、构建配置及依赖版本，供后续修改固件时参考。
+tests/：使用合成 Flash 数据和模拟命令的离线测试；不会连接硬件。
+
+作者仓库：https://github.com/czu963889306-dev/esp32_s3_wifi_camera
+基础提交：86cb4e6c29ce61af8997e75bd6ce426efacc7c3e
+编译环境：ESP-IDF 5.5.3，esp32-camera 2.1.6。
+esptool 官方说明：
+https://docs.espressif.com/projects/esptool/en/release-v4/esp32s3/installation.html
+https://docs.espressif.com/projects/esptool/en/release-v4/esp32s3/troubleshooting.html

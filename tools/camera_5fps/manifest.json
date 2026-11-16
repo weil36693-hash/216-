@@ -1,0 +1,72 @@
+{
+  "package": "Maturo ESP32-S3 camera source stream limit 5 FPS",
+  "release_date": "2026-11-16",
+  "application": {
+    "file": "firmware/camera_5fps_app.bin",
+    "size_bytes": 980800,
+    "sha256": "cae0bc8feff8b8c138cd1ec3e6a806dab082fa4e3417ced3e509b7fe9eac446d",
+    "project_name": "gc0308_http_stream",
+    "target": "ESP32-S3",
+    "idf_version": "5.5.3",
+    "flash_bytes": 4194304,
+    "psram_bytes": 8388608,
+    "resolution": [
+      640,
+      480
+    ],
+    "jpeg_quality_setting": 12,
+    "stream_fps_limit": 5,
+    "stream_path": "http://CAMERA_IP:81/",
+    "http_response_header": {
+      "X-Camera-Stream-FPS": "5"
+    }
+  },
+  "source": {
+    "repository": "https://github.com/czu963889306-dev/esp32_s3_wifi_camera",
+    "base_commit": "86cb4e6c29ce61af8997e75bd6ce426efacc7c3e",
+    "local_patch": "source/camera_5fps.patch",
+    "sdkconfig": "source/sdkconfig",
+    "dependencies": "source/dependencies.lock"
+  },
+  "compatibility": {
+    "requires_same_camera_board_and_pins": true,
+    "secure_boot": false,
+    "flash_encryption": false,
+    "python_package_minimum": "3.10",
+    "esptool": "4.13.0",
+    "active_app_slot": "detected from backup; ota_0 or ota_1 only",
+    "backup": "full 4 MiB, unique per camera",
+    "write_scope": "entire active app partition only, padding image with 0xFF; preserve bootloader, partition table, NVS and otadata"
+  },
+  "physical_validation": {
+    "vehicle": "car11",
+    "date": "2026-11-16",
+    "sensor": "OV2640",
+    "sample_seconds": 30.118,
+    "received_fps": 4.78,
+    "response_body_mbps": 1.176,
+    "resolution": [
+      640,
+      480
+    ],
+    "other_cameras_tested": false,
+    "portable_cli_tested_on_hardware": false,
+    "windows_execution_tested": false
+  },
+  "notes": [
+    "Source stream limit, not a sensor exposure-rate setting.",
+    "Per-camera backups contain device settings and must remain private.",
+    "This package has no vehicle flash backup, bootloader, partition table binary or merged full-flash image."
+  ],
+  "portable_package_validation": {
+    "offline_tests_passed": 63,
+    "clean_dependency_install": "passed: Python 3.10 on Linux, esptool 4.13.0",
+    "application_image_check": "esptool image_info: valid checksum and appended SHA256",
+    "local_chunked_http_test": {
+      "seconds": 5.008,
+      "received_fps": 4.992,
+      "firmware_header_matches_5fps": true
+    },
+    "hardware_access_during_packaging": false
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/czu963889306-dev/chuyun_ws.git",
+  "branch": "master",
+  "commit": "8043c442ee41c3beb62572502ae071a0ed75b238",
+  "archive_url": "https://codeload.github.com/czu963889306-dev/chuyun_ws/tar.gz/8043c442ee41c3beb62572502ae071a0ed75b238",
+  "archive_sha256": "35421255d15d19ead44994dfa2c527b0bb60e6e9f9d8cff86d171eb314683713",
+  "method": "GitHub source archive; Git history is not included",
+  "deployed_on": "2026-11-06",
+  "ros_distro": "humble"
+}

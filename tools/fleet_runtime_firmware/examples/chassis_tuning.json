@@ -1,0 +1,7 @@
+{
+  "telemetry_hz": 20,
+  "slow_telemetry_hz": 5,
+  "gyro_scale_x": 1.0,
+  "gyro_scale_y": 1.0,
+  "gyro_scale_z": 1.0
+}

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>LEAP · 车队控制台</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <svg class="svg-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="icon-car" viewBox="0 0 24 24"><path d="m5 10 2-5h10l2 5M4 10h16v9H4zM7 19v2m10-2v2M7 14h2m6 0h2"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M12 20V4m-6 6 6-6 6 6"/></symbol>
+    <symbol id="icon-turn" viewBox="0 0 24 24"><path d="M19 20v-7a6 6 0 0 0-6-6H4m5-5L4 7l5 5"/></symbol>
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 8a8 8 0 1 0 0 8M20 3v5h-5"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="icon-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></symbol>
+    <symbol id="icon-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+    <symbol id="icon-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2zM12 9v5m0 3v.1"/></symbol>
+    <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="icon-activity" viewBox="0 0 24 24"><path d="M2 12h5l3-8 4 16 3-8h5"/></symbol>
+  </svg>
+
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="LEAP 车队控制台首页">
+      <span class="brand-mark"><i></i><i></i><i></i><i></i></span>
+      <span class="brand-name">LEAP<span class="brand-divider"></span><span>车队控制台</span></span>
+    </a>
+    <div class="topbar-right"><span class="local-label">本机工作台</span><span id="service-pill" class="status-pill pending"><i></i><span>连接服务中</span></span></div>
+  </header>
+  <div id="demo-banner" class="demo-banner" hidden><svg><use href="#icon-alert"/></svg><strong>演示模式 · 不会连接小车</strong><span>连接状态、实测数据与任务结果均为模拟，可体验完整控制流程。</span></div>
+  <div id="connection-banner" class="connection-banner" role="status" hidden></div>
+
+  <main>
+    <div class="page-heading">
+      <div><div class="eyebrow">FLEET OPERATIONS</div><h1>运动控制<span class="title-dot"></span></h1><p>选择速度任务或导入多车 CSV，核对参与车辆后明确开始。</p></div>
+      <div class="refresh-block"><button id="refresh-button" class="button button-quiet"><svg><use href="#icon-refresh"/></svg>刷新状态</button><span id="last-update">等待首次状态</span></div>
+    </div>
+
+    <section class="overview" aria-label="连接概览">
+      <div class="stat"><div class="stat-icon blue"><svg><use href="#icon-car"/></svg></div><div><span class="stat-label">已配置车辆</span><div class="stat-value"><strong id="total-count">—</strong><small>辆</small></div></div></div>
+      <div class="stat"><div class="stat-icon green"><svg><use href="#icon-activity"/></svg></div><div><span id="connected-label" class="stat-label">连接正常</span><div class="stat-value"><strong id="connected-count">—</strong><small>辆</small><span id="connection-note" class="stat-note">等待数据</span></div></div></div>
+      <div class="stat"><div class="stat-icon pale"><svg><use href="#icon-check"/></svg></div><div><span class="stat-label">本次已选</span><div class="stat-value"><strong id="selected-count">0</strong><small>辆</small><span id="selection-note" class="stat-note">尚未选择</span></div></div></div>
+      <div class="stat"><div class="stat-icon pale"><svg><use href="#icon-clock"/></svg></div><div><span class="stat-label">发送频率</span><div class="stat-value"><strong>20</strong><small>Hz</small><span class="stat-note">固定频率</span></div></div></div>
+    </section>
+
+    <section id="connections-panel" class="panel connections-panel" aria-labelledby="connections-title">
+      <div class="panel-heading connections-heading"><div><div class="section-kicker">CONNECTIONS / 车辆通信</div><h2 id="connections-title">连接管理 <span id="connections-count" class="count-badge">等待状态</span></h2></div><span id="connections-owned" class="panel-hint">仅管理本页启动的连接</span></div>
+      <div class="connections-toolbar"><div class="connection-selection-tools"><strong id="connection-selected-count">连接目标 0 辆</strong><button id="connection-select-all" class="text-button" type="button">全选</button><button id="connection-clear" class="text-button muted" type="button">清空</button></div><div class="connection-main-actions"><button id="connection-check" class="button button-quiet" type="button" disabled>仅检测</button><button id="connection-connect" class="button button-connect" type="button" disabled><svg><use href="#icon-activity"/></svg>检测并连接所选</button></div></div>
+      <p class="connections-note"><strong>这里的勾选仅用于连接，与下方运动选车独立。</strong> 默认连接不保存配置、不重启车辆；已有外部连接不重复启动。关闭本页连接仅释放通信服务，不等于停车。</p>
+      <p class="watchdog-explanation">车端超时停车状态来自 HTTP 检测快照，非实时遥测；点击“仅检测”可重新读取。旧固件未报告时不推断已启用，车端序号也不代表指令 ACK。</p>
+      <div id="connections-unavailable" class="connections-notice" role="status">正在读取连接管理能力；此操作不会自动发送请求。</div>
+      <div id="connections-feedback" class="connections-feedback" role="status" hidden></div>
+      <details id="connection-details" class="connection-details" open><summary><span>逐车连接状态与目标选择</span><span>离线车辆也可选 · 展开每车详情查看日志</span></summary><div id="connection-grid" class="connection-grid" role="list" aria-label="独立车辆连接目标"></div></details>
+    </section>
+
+    <section id="mocap-panel" class="panel mocap-panel" aria-labelledby="mocap-title">
+      <div class="panel-heading mocap-heading"><div><div class="section-kicker">MOTION CAPTURE / 只读位置观测</div><h2 id="mocap-title">动捕位置 <span id="mocap-fresh-count" class="count-badge">0 份新鲜数据</span></h2></div><div class="mocap-map-controls"><label for="mocap-frame">坐标系 frame</label><select id="mocap-frame" aria-label="选择动捕坐标系"><option value="">暂无坐标系</option></select><button id="mocap-fit" class="button button-quiet" type="button">适配视野</button></div></div>
+      <p class="mocap-explanation">动捕与底盘连接独立；新鲜仅表示近期收到数据，不代表有效跟踪。箭头为<strong>原始刚体 +X 投影，未校准车头</strong>；不同 frame 分开显示。</p>
+      <div class="mocap-layout"><div class="mocap-map-area"><div class="mocap-map-top"><span id="mocap-map-frame">等待动捕坐标系</span><span id="mocap-map-live" class="mocap-live-label">尚无数据</span></div><div class="mocap-plot-wrap"><svg id="mocap-map" viewBox="0 0 900 420" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="mocap-map-title mocap-map-description"><title id="mocap-map-title">动捕 XY 等比例位置图</title><desc id="mocap-map-description">只读显示所选坐标系中的位置与原始刚体方向，不操作车辆。</desc><g id="mocap-grid"></g><g id="trajectory-paths"></g><g id="mocap-points"></g></svg><div id="mocap-map-empty" class="mocap-map-empty"><strong>尚无可绘制的动捕位置</strong><span>未提供坐标或 frame 的数据不会画在原点。</span></div></div><div class="mocap-map-legend"><span><i class="mocap-marker-key fresh"></i>新鲜数据</span><span><i class="mocap-marker-key stale"></i>过期 / 上次位置</span><span><i class="mocap-marker-key selected"></i>当前选车 / 任务参与</span><span>只读图 · 点击不会选车或发送命令</span></div><div id="trajectory-map-legend" class="trajectory-map-legend" hidden></div></div><div class="mocap-frame-list"><div class="mocap-list-heading"><strong>当前 frame 观测</strong><span id="mocap-frame-count">0 辆</span></div><p class="mocap-list-help">车号绑定确认与数据新鲜度分别标记；未确认的对应关系仍待现场核对。</p><div id="mocap-frame-cars" class="mocap-frame-cars"><p class="small-empty">等待动捕数据</p></div><div id="mocap-unplotted" class="mocap-unplotted">无坐标不会绘图；失联后仅保留上次位置。</div></div></div>
+    </section>
+
+    <div class="workspace">
+      <section class="panel vehicles-panel" aria-labelledby="vehicles-title">
+        <div class="panel-heading"><div><div class="section-kicker">01 / 选择车辆</div><h2 id="vehicles-title">车辆列表 <span id="visible-count" class="count-badge">0</span></h2></div><span id="vehicle-selection-hint" class="panel-hint">仅连接正常的车辆可启动</span></div>
+        <div class="fleet-toolbar">
+          <label class="search-field"><svg><use href="#icon-search"/></svg><input id="car-search" type="search" placeholder="搜索车辆 ID 或 IP" aria-label="搜索车辆 ID 或 IP" autocomplete="off"></label>
+          <label class="online-filter"><input id="online-only" type="checkbox"><span>只看在线</span></label>
+          <div class="selection-tools"><button id="select-online" class="text-button">选择在线车辆</button><span></span><button id="clear-selection" class="text-button muted">清空选择</button></div>
+        </div>
+        <div class="fleet-legend"><span><i class="dot connected"></i>连接正常</span><span><i class="dot discovered"></i>接口待确认</span><span><i class="dot stale"></i>过期 / 异常</span><span><i class="dot offline"></i>未连接</span><span class="legend-tail">v / w 为里程计实测值</span></div>
+        <details class="connection-help"><summary>首次使用 / 车辆未连接？<span>查看连接说明</span></summary><div><p>先在上方“连接管理”选择目标并点击“检测并连接所选”。如需修改车辆配置，核对当前值与目标值后，再点击明确标注“会重启”的单车按钮。也可继续在终端使用 <code>./start_fleet.sh</code>。</p><p>连接勾选不代表运动选车。“连接正常”表示最近 2 秒收到里程计，且已发现速度命令订阅；已配置的车辆数量不等于在线数量。</p><p>运动任务执行期间暂停连接变更，仍可检测状态与发送停止命令。顶部显示“演示模式”时，连接过程以模拟数据为准，不会连接小车。</p></div></details>
+        <div id="car-grid" class="car-grid" role="list" aria-label="车辆连接状态"></div>
+        <div id="fleet-empty" class="empty-state"><svg><use href="#icon-car"/></svg><strong>正在读取车队配置</strong><span>连接状态将自动更新</span></div>
+        <div class="fleet-footer"><span><i class="dot pulse-dot"></i>每 500 ms 更新状态</span><span>速度：m/s · 角速度：rad/s</span></div>
+      </section>
+
+      <aside class="panel task-panel" aria-labelledby="task-title">
+        <div class="panel-heading"><div><div class="section-kicker">02 / 设置任务</div><h2 id="task-title">运动参数</h2></div><div class="task-heading-actions"><span id="configuration-state" class="tiny-label">待配置</span><button id="show-job-results" class="text-button" type="button" hidden>查看反馈</button></div></div>
+        <div class="task-content">
+          <div class="segmented control-mode-switch" role="group" aria-label="运动控制模式"><button id="control-velocity" class="active" aria-pressed="true" type="button">速度控制</button><button id="control-trajectory" aria-pressed="false" type="button">CSV 轨迹</button></div>
+          <div id="velocity-participants">
+          <div class="field-label">参与车辆 <span id="target-count">0 辆</span></div>
+          <div id="selected-targets" class="selected-targets"><span class="targets-placeholder">从左侧选择本次需要控制的车辆</span></div>
+          </div>
+          <fieldset id="command-fields">
+            <legend class="sr-only">运动任务设置</legend>
+            <div class="segmented" role="group" aria-label="速度设置方式"><button id="mode-uniform" class="active" aria-pressed="true" type="button">统一速度</button><button id="mode-individual" aria-pressed="false" type="button">逐车设置</button></div>
+            <div id="uniform-controls">
+              <div class="speed-fields"><label><span>前进速度 <b>v</b></span><div class="number-field"><input id="uniform-v" type="number" value="0.05" step="0.01" inputmode="decimal" aria-label="统一前进速度，米每秒"><span>m/s</span></div></label><label><span>转向角速度 <b>w</b></span><div class="number-field"><input id="uniform-w" type="number" value="0" step="0.01" inputmode="decimal" aria-label="统一转向角速度，弧度每秒"><span>rad/s</span></div></label></div>
+              <div class="preset-label">快捷填值 <span>仅填写参数，不发送命令</span></div>
+              <div class="presets"><button type="button" data-preset="forward"><svg><use href="#icon-arrow"/></svg>前进</button><button type="button" data-preset="backward"><svg class="rotate-180"><use href="#icon-arrow"/></svg>后退</button><button type="button" data-preset="left"><svg><use href="#icon-turn"/></svg>左转</button><button type="button" data-preset="right"><svg class="mirror"><use href="#icon-turn"/></svg>右转</button></div>
+            </div>
+            <div id="individual-controls" hidden><div id="individual-empty" class="small-empty">选车后可分别填写每辆车的速度。</div><div class="individual-table-wrap"><table id="individual-table"><thead><tr><th>车辆</th><th>v <span>m/s</span></th><th>w <span>rad/s</span></th></tr></thead><tbody id="individual-rows"></tbody></table></div></div>
+            <div class="duration-row"><label for="duration">持续时间</label><div class="number-field duration-field"><input id="duration" type="number" value="2" min="0.1" max="60" step="0.1" inputmode="decimal"><span>秒</span></div></div>
+            <p class="field-help">0.1–60 秒；v 正值前进，w 正值向左转。</p>
+          </fieldset>
+
+          <section id="trajectory-controls" class="trajectory-controls" aria-label="CSV多车轨迹设置" hidden>
+            <label class="trajectory-file-label" for="trajectory-file"><strong>导入一个 CSV，匹配多辆车</strong><span>car_id,t,x,y · world 米 / t 秒 · 最大 8 MiB</span><input id="trajectory-file" type="file" accept=".csv,text/csv"></label>
+            <div class="trajectory-file-tools"><button id="trajectory-template" class="text-button" type="button">下载静态模板</button><button id="trajectory-reload" class="text-button" type="button">重载服务端预览</button></div>
+            <p class="trajectory-import-note">导入只做预览，不会运动。4 / 04 / car04 均由服务端匹配为 car04；静态模板的世界坐标必须按现场调整。</p>
+            <div id="trajectory-message" class="trajectory-message" role="status" hidden></div>
+            <div id="trajectory-file-summary" class="trajectory-file-summary">尚未导入 CSV</div>
+            <div class="trajectory-selection-heading"><strong>CSV 参与车辆</strong><div><button id="trajectory-select-all" class="text-button" type="button">全选文件车辆</button><button id="trajectory-clear" class="text-button muted" type="button">清空</button></div></div>
+            <p class="trajectory-selection-note">与速度选车独立；可选离线车查看状态。检查只提示风险，不作为开始条件；开始时服务端仍会判断输入与任务资源是否可用。运行中动捕中断时按已发送速度推算继续，恢复后切回动捕；各车仍按结束时间停车。</p>
+            <div id="trajectory-car-list" class="trajectory-car-list"><p class="small-empty">导入后显示匹配车辆、点数与各车时长。</p></div>
+            <button id="trajectory-check" class="button button-quiet" type="button" disabled>检查轨迹状态（仅提示）</button>
+            <p id="trajectory-check-status" class="trajectory-check-status">检查可选，只提示风险，不锁定开始按钮；开始时服务端校验可用输入与任务占用。</p>
+            <details class="trajectory-generator"><summary>从当前选车位置生成平滑直线 CSV</summary><p>优先使用 CSV 参与选择；为空时使用左侧速度选车。<strong>无 CSV 时，先在“速度控制”中选车，再切换回来生成。</strong> 按各车当前动捕位置与自身刚体 +X 生成世界坐标路线，不会运动。</p><div class="trajectory-generator-fields"><label>距离 / m<input id="trajectory-generate-distance" type="number" value="0.5" step="0.05" min="0.01" max="5" inputmode="decimal"></label><label>时长 / s<input id="trajectory-generate-duration" type="number" value="20" step="1" min="1" max="3600" inputmode="decimal"></label></div><button id="trajectory-generate" class="button button-quiet" type="button">生成、下载并导入预览</button></details>
+          </section>
+
+          <div class="task-summary"><div class="summary-heading"><svg><use href="#icon-check"/></svg><strong>本次任务摘要</strong></div><div id="summary-title" class="summary-title">尚未选择车辆</div><div id="summary-commands" class="summary-commands">配置完成后，将在此显示待发送的命令。</div><div class="summary-meta"><span id="summary-duration">持续 2 秒</span><i></i><span>20 Hz</span><i></i><span>结束发送零速度</span></div></div>
+          <button id="run-button" class="button button-primary" type="button" disabled><svg><use href="#icon-play"/></svg><span>启动本次任务</span></button>
+          <p id="run-hint" class="run-hint">请选择至少一辆连接正常的小车。</p>
+          <div id="action-message" class="action-message" role="status" hidden></div>
+          <div id="job-panel" class="job-panel" hidden><div class="job-top"><span id="job-status">任务运行中</span><strong id="job-remaining">— <small>秒</small></strong></div><div class="progress-track"><div id="job-progress"></div></div><div class="job-bottom"><span id="job-detail"></span><span id="job-id"></span></div><div id="trajectory-job-info" class="trajectory-job-info" hidden><strong id="trajectory-job-file"></strong><span>共同计时 · 各车到达自己的结束时间后发送零速度</span><span class="trajectory-localization-note">推算位置并非动捕实测；动捕恢复后自动切回，历史提示保留在事件记录。</span><div id="trajectory-job-progress"></div></div><p id="job-error" hidden></p><section id="job-stop-results" class="stop-results" aria-labelledby="job-stop-title" hidden><div class="stop-results-heading"><strong id="job-stop-title">逐车里程计停车反馈</strong><span id="job-stop-summary"></span></div><p id="job-stop-note" class="stop-results-note">确认依据：停止后的连续新鲜里程计近零反馈；并非固件 ACK。</p><div id="job-stop-rows" class="stop-result-rows"></div></section></div>
+          <p class="control-note">本页发送车体速度并显示动捕位姿，运动策略由实验程序决定。里程计近零仅为反馈观测结果，量纲仍待实机校验；并非固件 ACK 或实车物理停车确认。</p>
+        </div>
+      </aside>
+    </div>
+
+    <section class="panel log-panel" aria-labelledby="log-title"><div class="log-heading"><div><h2 id="log-title">操作与结果</h2><span>服务事件与本页操作记录</span></div><div class="log-tools"><span id="event-count" class="tiny-label">0 条记录</span><button id="download-log" class="text-button">下载记录 JSON</button></div></div><div id="event-list" class="event-list"><div class="log-empty">当前没有操作记录。页面打开后不会自动发送运动命令。</div></div></section>
+    <footer class="page-footer"><span>LEAP / DIRECT VELOCITY CONTROL</span><span>差速控制 · 独立 ROS 域 · 本机服务</span></footer>
+  </main>
+
+  <div class="stop-dock"><div class="dock-inner"><div class="dock-status"><span id="dock-indicator" class="dock-indicator"></span><div><strong id="dock-title">等待服务连接</strong><span id="dock-description">页面只读加载，不会自动启动任务</span></div></div><div class="stop-actions"><button id="stop-job" class="button button-stop" disabled><svg><use href="#icon-stop"/></svg><span>停止本次</span></button><button id="stop-all" class="button button-stop-all" disabled><svg><use href="#icon-stop"/></svg>全车发送零速度</button></div></div></div>
+</body>
+</html>

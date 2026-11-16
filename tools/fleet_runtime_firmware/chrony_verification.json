@@ -1,0 +1,10 @@
+{
+  "checked_at": "2026-11-16T16:39:07.424581+08:00",
+  "server": "10.1.1.249",
+  "port": 123,
+  "stratum": 4,
+  "leap_indicator": 0,
+  "reply_seconds": 0.000162,
+  "chronyc_tracking": "Reference ID    : C6120035 (198.18.0.53)\nStratum         : 4\nRef time (UTC)  : Mon Nov 16 08:39:02 2026\nSystem time     : 0.011008564 seconds fast of NTP time\nLast offset     : +0.015206704 seconds\nRMS offset      : 0.039024912 seconds\nFrequency       : 6.259 ppm fast\nResidual freq   : +1.441 ppm\nSkew            : 96.253 ppm\nRoot delay      : 0.242890388 seconds\nRoot dispersion : 0.012650765 seconds\nUpdate interval : 64.8 seconds\nLeap status     : Normal\n",
+  "limitations": "Response tested from this main PC; individual cameras not yet tested on runtime firmware."
+}

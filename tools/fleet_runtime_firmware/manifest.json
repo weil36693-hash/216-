@@ -1,0 +1,132 @@
+{
+  "release": "2026.11.16-runtime1",
+  "build_date": "2026-11-16",
+  "idf": "5.5.3",
+  "devices": {
+    "camera": {
+      "file": "camera_runtime.bin",
+      "size": 1005248,
+      "sha256": "6ea695950897ed6e5c4f044d3ebc4af3ac6e381e518008afe7886901b6cbb248",
+      "project": "gc0308_http_stream",
+      "version": "2026.11.16-runtime1",
+      "base_commit": "86cb4e6c29ce61af8997e75bd6ce426efacc7c3e",
+      "partitions": [
+        {
+          "label": "nvs",
+          "type": 1,
+          "subtype": 2,
+          "offset": 36864,
+          "size": 24576,
+          "flags": 0
+        },
+        {
+          "label": "otadata",
+          "type": 1,
+          "subtype": 0,
+          "offset": 61440,
+          "size": 8192,
+          "flags": 0
+        },
+        {
+          "label": "phy_init",
+          "type": 1,
+          "subtype": 1,
+          "offset": 69632,
+          "size": 4096,
+          "flags": 0
+        },
+        {
+          "label": "ota_0",
+          "type": 0,
+          "subtype": 16,
+          "offset": 131072,
+          "size": 1572864,
+          "flags": 0
+        },
+        {
+          "label": "ota_1",
+          "type": 0,
+          "subtype": 17,
+          "offset": 1703936,
+          "size": 1572864,
+          "flags": 0
+        }
+      ]
+    },
+    "chassis": {
+      "file": "chassis_runtime.bin",
+      "size": 1118672,
+      "sha256": "a941e0dbfe50fa659c0fffa63ac38c95f7eb177c1fd042a104abbbdb9f3d3d11",
+      "project": "leap_ros_mcu_driver",
+      "version": "2026.11.16-runtime1",
+      "base_commit": "c18c5b8d1b8f67b260167d6364bda73bc8b077a4",
+      "partitions": [
+        {
+          "label": "nvs",
+          "type": 1,
+          "subtype": 2,
+          "offset": 36864,
+          "size": 16384,
+          "flags": 0
+        },
+        {
+          "label": "otadata",
+          "type": 1,
+          "subtype": 0,
+          "offset": 53248,
+          "size": 8192,
+          "flags": 0
+        },
+        {
+          "label": "phy_init",
+          "type": 1,
+          "subtype": 1,
+          "offset": 61440,
+          "size": 4096,
+          "flags": 0
+        },
+        {
+          "label": "factory",
+          "type": 0,
+          "subtype": 0,
+          "offset": 65536,
+          "size": 2097152,
+          "flags": 0
+        },
+        {
+          "label": "storage",
+          "type": 1,
+          "subtype": 130,
+          "offset": 2162688,
+          "size": 1048576,
+          "flags": 0
+        }
+      ]
+    }
+  },
+  "supported_flasher_platforms": [
+    "Windows",
+    "Linux"
+  ],
+  "python_minimum": "3.10",
+  "esptool": "4.13.0",
+  "hardware_validation": {
+    "new_release_flashed": false,
+    "runtime_settings_on_hardware_tested": false,
+    "windows_hardware_tested": false,
+    "all_25_cameras_synchronized": false
+  },
+  "host_ntp": {
+    "server": "10.1.1.249",
+    "allowed_clients": "10.1.1.0/24",
+    "configured_by_user": true,
+    "udp_reply_verified": true,
+    "leap_indicator": 0
+  },
+  "tests": {
+    "portable_python": 75,
+    "host_session_console_and_chrony": 82,
+    "chassis_ctest_groups": 6,
+    "camera_host_groups": 14
+  }
+}

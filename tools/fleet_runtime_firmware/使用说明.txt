@@ -1,0 +1,192 @@
+25 车实验运行时固件包
+版本：2026.11.16-runtime1
+
+一、内容和验证范围
+
+本包同时包含底盘 chassis_runtime.bin 和相机 camera_runtime.bin。
+两者都是应用镜像，仅用于已运行本项目固件、硬件接线相同的 ESP32-S3 模块。
+必须分别升级底盘和相机；只刷相机不能获得底盘遥测/陀螺调参功能。
+默认保留原有网络、车号、ROS domain、Agent 配置和原运动安全功能。
+
+两份固件经过 ESP-IDF 5.5.3 编译、镜像校验和离线测试。
+本次运行时版本尚未进行单车硬件验收，也未测试 Windows 实机刷写。
+此前11号车约4.78 FPS实测属于上一版固定5 FPS固件，不能当作新版实测结果。
+建议按第六节先完成一辆的断电重启、调参、授时和图传验收，再批量处理。
+
+二、这次可以不重新编译就调整的参数
+
+相机端口80网页：http://相机IP/settings
+相机读取参数：GET /api/settings
+相机部分更新：POST /api/settings，JSON对象；保存NVS后立即使用。
+
+  fps                    1～30，默认5；网络图传发送上限，不是传感器曝光率。
+  jpeg_quality           4～63，默认12；越小质量越高，带宽/帧大小通常越大。
+  resolution             160x120、320x240、640x480、800x600、1024x768、
+                         1280x1024、1600x1200；默认640x480。
+  auto_exposure          true/false，默认true。
+  exposure               0～1200，默认300；auto_exposure=false时使用。
+                         这是传感器寄存器单位，不是微秒。
+  exposure_level         -2～2，默认0。
+  auto_white_balance     true/false，默认true。
+  white_balance_mode     0自动、1晴天、2阴天、3办公室、4家居。
+                         自动需true+0，手动需false+1～4。
+  auto_gain              true/false，默认true。
+  gain                   0～30，默认0；auto_gain=false时使用。
+
+实际分辨率还受传感器型号限制；此前确认11号相机为OV2640。
+高分辨率、高质量和高帧率组合不保证实际输出达到设定上限。
+非法范围、未知字段、矛盾的白平衡模式会被拒绝。
+固件在调参和发送帧之间做互斥；写NVS或应用传感器失败时不返回成功，
+请查看 /api/status 的 sensor_consistent 和 settings_persisted。
+
+底盘网页：http://底盘IP/tuning
+底盘读取参数：GET /api/tuning
+底盘部分更新：POST /api/tuning，JSON对象；保存NVS成功后立即使用。
+
+  telemetry_hz           1～50，默认50；micro-ROS的odom、imu与MAVLink快组。
+  slow_telemetry_hz       1～10，默认10；micro-ROS的scan、battery_state、
+                         ultrasonic与MAVLink慢组；受实际传感器产出限制。
+  gyro_scale_x/y/z        各0.5～2.0，默认1.0。
+
+陀螺比例作用于去零偏后的角速度，并参与姿态积分；保留原轴方向和单位。
+调整比例不重置之前累计的姿态；1Hz心跳、20ms运动控制与IMU采样周期保持原值。
+零偏与比例是不同校准量，本次新增的是每轴比例系数。
+
+底盘和相机各自都支持 POST /api/wifi，JSON为 {"ssid":"网络名称","password":"密码"}。
+保存后模块约1～1.5秒重启切换网络；这是运行时配置，无需再刷固件。
+它修改的是模块要连接的Wi-Fi网络，不改变由MAC生成的设备身份名称。
+底盘和相机是两个模块，按需分别配置；API读取不会返回密码。
+新固件会优先读新配置，并兼容读取原网络配置；回退旧固件可能读到旧Wi-Fi键，
+具体说明见 source/camera_RUNTIME_API.md。
+
+三、在另一台电脑上刷写
+
+需要Python3.10以上（建议3.10～3.12）、USB数据线；首次装依赖需要网络。
+无需ROS或ESP-IDF。把整个ZIP解压到可写目录，不要从ZIP预览中运行。
+
+Windows PowerShell：
+  cd "D:\fleet_runtime_firmware"
+  py -3 -m venv .venv
+  .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+  .\.venv\Scripts\python.exe flash_firmware.py ports
+
+Linux：
+  python3 -m venv .venv
+  .venv/bin/python -m pip install -r requirements.txt
+  .venv/bin/python flash_firmware.py ports
+
+后面的 python 表示上面虚拟环境里的Python；Windows用
+.\.venv\Scripts\python.exe，Linux用 .venv/bin/python 替代。
+Linux串口无权限时，可针对实际端口执行：
+  sudo setfacl -m u:"$(id -un)":rw /dev/ttyACM0
+USB重插后可能需再次授权。不要用sudo运行整个刷写工具。
+
+先在 http://底盘IP/api/status 记录本车 device_name 和 camera.name。
+底盘名形如 Maturo_XXXXXXXXXXXX；相机名形如 Maturo_CAM_XXXXXXXXXXXX。
+每台模块的MAC均不同，不能套用11号车的MAC。IP也可能随DHCP变化。
+一次连接一个目标模块；将USB插入正在升级的底盘或相机自己的USB口。
+
+相机示例（替换COM5、car12和相机名称）：
+  python flash_firmware.py --device camera flash --port COM5 --car car12 --expect-mac Maturo_CAM_XXXXXXXXXXXX
+
+底盘示例（替换COM6、car12和底盘名称）：
+  python flash_firmware.py --device chassis flash --port COM6 --car car12 --expect-mac Maturo_XXXXXXXXXXXX
+
+Linux将COM号换为/dev/ttyACM0或实际/dev/serial/by-id/...路径。
+X是占位符，不是有效MAC。升级底盘时让车辆停稳，并结束主机控制任务。
+
+工具会校验包内镜像SHA256、芯片/MAC/加密状态，再完整备份4MiB Flash并确认落盘，
+然后严格检查原项目名、分区和活动应用，显示摘要。核对后输入大写FLASH。
+新镜像按0xFF补足活动应用槽，只写这一应用分区，不整片擦除。
+相机自动识别ota_0/ota_1；底盘要求factory分区0x10000、大小0x200000。
+bootloader、NVS、分区表、OTA数据和其他分区保留；写后校验并回读保护区比较。
+不匹配的设备停止，不通过“强刷”或写整片镜像绕过检查。
+不要把本包.bin文件直接写到地址0。
+
+每次备份放在backups/内的独立目录，可用 --backup-root 指定移动硬盘路径。
+备份含设备设置，请私下保管；本交付包没有包含任何车辆的原始Flash备份。
+写入失败或验证失败时工具不会主动启动可能不完整的应用，保留全部备份和日志。
+
+恢复同一模块的原应用：
+  python flash_firmware.py --device camera restore --port COM5 --backup "backups/本次相机备份目录"
+  python flash_firmware.py --device chassis restore --port COM6 --backup "backups/本次底盘备份目录"
+核对后输入RESTORE。恢复只回写原应用，不回滚NVS；必须使用本模块的备份。
+旧camera_5fps包创建的备份请用旧包中的恢复工具，本包使用新的备份格式。
+
+四、用命令调参（跨平台，不需要ROS）
+
+查看状态/版本：
+  python runtime_config.py --device camera --host 相机IP status
+  python runtime_config.py --device chassis --host 底盘IP status
+
+读取当前参数：
+  python runtime_config.py --device camera --host 相机IP get
+  python runtime_config.py --device chassis --host 底盘IP get
+
+修改examples中的JSON，按需仅保留需要改的字段，然后应用：
+  python runtime_config.py --device camera --host 相机IP set --expect-name Maturo_CAM_XXXXXXXXXXXX --json-file examples/camera_settings.json
+  python runtime_config.py --device chassis --host 底盘IP set --expect-name Maturo_XXXXXXXXXXXX --json-file examples/chassis_tuning.json
+
+示例文件是调试示例，不是测量得到的最佳参数；camera示例会切到手动曝光/白平衡/增益。
+客户端先核对固件版本和设备名，避免IP变化后写到别的模块。
+
+改Wi-Fi（密码在终端交互输入，不写在命令参数中）：
+  python runtime_config.py --device camera --host 相机IP wifi --expect-name Maturo_CAM_XXXXXXXXXXXX --ssid "实验网络名称"
+  python runtime_config.py --device chassis --host 底盘IP wifi --expect-name Maturo_XXXXXXXXXXXX --ssid "实验网络名称"
+
+刷完或调帧率后检查视频（先关闭浏览器和ROS的同路视频读取）：
+  python verify_stream.py --url http://相机IP:81/ --seconds 30 --expected-fps 5
+修改到7FPS时把expected-fps改7。测量工具没有客户端限帧，实际接收率可低于上限。
+HTTP响应头记录连接建立时的FPS；在线改值后请断开重连，再检查响应头和新帧率。
+
+五、授时和每个session的版本记录
+
+相机向10.1.1.249做SNTP，约60秒更新；/api/status 的time_sync包含服务器、
+synced和last_sync_unix_us。没有收到有效授时、连接中断或同步过期时不会报已同步。
+SNTP用于统一系统时钟；此包没有把MJPEG帧附加成硬件曝光时刻，不应据此宣称
+各车相机曝光同步、硬件触发同步或已经达到毫秒级端到端控制精度。
+
+主电脑配置脚本在host_project/scripts/configure_camera_chrony.py。
+在拥有10.1.1.249地址的Ubuntu/Debian电脑执行：
+  sudo python3 host_project/scripts/configure_camera_chrony.py --apply
+脚本安装chrony、备份已有配置、允许10.1.1.0/24、绑定10.1.1.249:123，
+保留上游时间源；UFW已启用时增加对应UDP123规则，不主动启用UFW。
+当前这台主电脑已经由用户执行配置，并由本次交付核验NTP实际响应，见VALIDATION.txt。
+如更换主电脑，仍需要在新的10.1.1.249主机上执行一次。
+
+host_project/包含ROS主项目对应文件更新。当前工作区已更新并重新构建leap_fleet。
+另一台已有相同项目的ROS电脑：先备份现有项目，将host_project/目录下的文件
+按同名相对路径复制到其leap-ros根目录，再执行：
+  source /opt/ros/humble/setup.bash
+  colcon build --base-paths src --packages-select leap_fleet --symlink-install --parallel-workers 1
+  source install/setup.bash
+不能只刷设备而继续使用旧主机程序，否则旧程序不会自动生成这些版本日志。
+这部分仅适用于ROS/Linux主电脑；Windows刷写电脑无需安装主机程序。
+
+启动会话、控制台实验任务及相关CLI任务都会生成 *_firmware.json 或版本sidecar，
+包含本session所用车的底盘/相机版本、身份、构建摘要和可用的同步状态。
+版本采集在控制线程外执行，不使用以前某个session的版本替代本次结果。
+设备不可达、旧固件没有版本接口、身份不符或采集未完成会明确记录，不能当作已确认。
+具体日志位置、独立采集命令见host_project/常用命令/运行时固件_授时与会话日志.txt。
+
+六、单车验收顺序
+
+1. 分别升级底盘和相机，确认两者 /api/status 都报2026.11.16-runtime1。
+2. 查询实际Wi-Fi省电状态为关闭；确认底盘原Agent/domain等配置仍正确。
+3. 调整一组相机参数和底盘参数，读回；断电重启再读回，确认NVS保存。
+4. 检查相机画面、帧率和真实遥测频率；观察陀螺校准后的数值。
+5. 确认chrony上游同步、相机time_sync.synced=true，记录同步时间。
+6. 运行一次短的实验会话，检查该session的底盘/相机版本JSON已采集完成。
+7. 保存本车备份和验收记录，再逐台推广到25车。
+
+七、包内校验和源码
+
+firmware_identity.py固定两份镜像的字节数与SHA256，刷写前自动核对。
+manifest.json记录构建版本和验证范围；SHA256SUMS记录包内文件校验值。
+source/保存两份项目的修改补丁、构建配置和接口说明。补丁包含本地新增文件，
+用于对应基础提交；含底盘此前的运动安全修改和相机此前5FPS限频修改。
+修改固件源码后的重建需ESP-IDF及micro-ROS等依赖；仅刷写无需这些依赖。
+
+官方资料：
+https://docs.espressif.com/projects/esp-idf/en/release-v5.5/esp32/api-guides/wifi.html
+https://chrony-project.org/doc/latest/chrony.conf.html

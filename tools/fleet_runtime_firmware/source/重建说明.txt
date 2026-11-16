@@ -1,0 +1,7 @@
+源码补丁基于manifest.json记录的各自base_commit。
+相机仓库：https://github.com/czu963889306-dev/esp32_s3_wifi_camera
+底盘仓库的原本地源码目录为/home/ros-car/leap_ros_mcu_driver。
+两份补丁均已在对应基础提交上通过git apply --check，包含所有新增源文件和测试。
+切换到对应提交后执行git apply对应patch，并使用ESP-IDF5.5.3构建；各自sdkconfig和依赖锁定文件已提供。
+底盘micro-ROS组件需要完整构建依赖，原机已安装缓存不随此交付包分发。
+完整项目备份另存/home/ros-car/project_backups/car_project_20261116_160538。

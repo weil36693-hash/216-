@@ -1,0 +1,59 @@
+动捕启动与实时 XYZ 坐标（ROS 2 Humble）
+
+前提：动捕电脑已开启 VRPN 输出，且本机能连接 10.1.1.198。
+服务器 IP 和端口取自截图；若服务端设置改变，请同步修改。
+
+1. 终端一：启动动捕客户端，保持运行
+
+source /opt/ros/humble/setup.bash
+source ~/vrpn_ws/install/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+ros2 launch vrpn_mocap client.launch.yaml server:=10.1.1.198 port:=3883
+
+2. 终端二：查看新刚体 car_01 的实时位置（只显示 x、y、z，单位为米）
+
+source /opt/ros/humble/setup.bash
+source ~/vrpn_ws/install/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+ros2 topic echo /vrpn_mocap/car_01/pose --field pose.position --qos-reliability best_effort
+
+当前新建的小车刚体为 car_01；名称中的下划线和数字必须完全一致。
+
+3. 如果没有坐标输出，先列出实际的动捕话题
+
+ros2 topic list | grep '^/vrpn_mocap/.*/pose$'
+
+将第 2 步中的 /vrpn_mocap/car_01/pose 替换成列表中目标刚体的话题。
+2026-11-06 最新检查：car_01 实时输出约 79 Hz，8 秒收到 634 条不同位姿。
+本次采样的翻滚角约 -0.14°、俯仰角约 0.27°，通过水平姿态校验。
+刚体名称可能随服务端设置改变，以动捕软件中的实际名称为准。
+话题即使出现在列表中，也可能只有等待数据的订阅者；可继续检查发布者：
+
+ros2 topic info /vrpn_mocap/car_01/pose --verbose
+
+Publisher count 大于 0 表示存在发布者，再用 echo 确认数据持续更新。
+
+4. 可选：查看完整位姿（位置和四元数姿态）
+
+ros2 topic echo /vrpn_mocap/car_01/pose --qos-reliability best_effort
+
+轨迹控制需要刚体坐标轴与车体一致：X 轴指向车头，Z 轴朝上。
+位置数据正常并不代表刚体姿态坐标轴也已校正。
+
+5. 可选：查看数据频率
+
+ros2 topic hz /vrpn_mocap/car_01/pose
+
+6. 核验实时跟踪
+
+消息频率正常、时间戳更新，还需要确认坐标能反映车辆的实际移动。
+本机 VRPN 客户端默认给消息使用本机时间，因此新的 ROS 时间戳本身
+不能证明动捕软件已经重新识别到车辆。
+轻推小车几厘米，观察第 2 步的 XYZ 是否跟着变化。
+若不变，检查动捕软件是否处于 Live/实时采集、car_01 是否为有效跟踪，
+以及标记点是否可见。若软件内坐标变化而 ROS 不变，再排查 VRPN 输出。
+
+在对应终端按 Ctrl+C 停止。
+这些命令只连接动捕、读取数据，不会控制小车移动。

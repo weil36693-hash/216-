@@ -1,0 +1,88 @@
+运行时固件配套：主电脑授时与会话版本日志
+更新：2026-11-16
+
+一、主电脑 chrony
+
+目标：相机 SNTP 请求主电脑 10.1.1.249 的 UDP/123；主电脑允许 10.1.1.0/24。
+当前电脑已由用户执行配置：chrony 服务 active，绑定 10.1.1.249:123，
+访问规则允许 10.1.1.0/24；已收到 mode=4、leap=0、stratum=2 的真实 NTP 响应。
+这验证了主电脑服务，不代表 25 台相机已经完成授时。
+在其他主电脑部署或重新配置时，以下脚本默认只预览，需要带 sudo 才修改系统。
+
+  cd /home/ros-car/leap-ros
+  python3 scripts/configure_camera_chrony.py
+  sudo python3 scripts/configure_camera_chrony.py --apply
+
+脚本再次检查本机拥有 10.1.1.249，然后安装 chrony、备份已有配置、
+保留现有上游时间源，在 chrony.conf 加入：
+
+  allow 10.1.1.0/24
+  bindaddress 10.1.1.249
+
+修改前检查完整 chrony 配置语法，成功后启用并重启服务。
+若 UFW 已启用，增加仅从该网段至 10.1.1.249 UDP/123 的允许规则；不会启用 UFW。
+若使用其它防火墙，需要确保同一条 UDP/123 通路可达。
+配置备份位于 /var/backups/leap-camera-chrony/；重复执行不会重复追加配置块。
+服务启动失败会恢复修改前的 chrony.conf；软件安装本身不会回滚。
+
+脚本不添加 local stratum，不把未校时的电脑伪装成已同步的时间源。
+返回 0：主机 chrony 报告已同步。返回 2：配置已应用，但主机尚未确认同步。
+返回 1：配置或安装错误，需要按终端输出处理。
+
+检查：
+  chronyc tracking
+  chronyc sources -v
+  sudo chronyc accheck 10.1.1.233
+
+tracking 的 Leap status 应为 Normal；sources 应显示已选中上游源（*）。
+accheck 只能证明访问规则允许该地址，不证明那台相机实际收到时间。
+再访问每台相机 GET http://相机IP/api/status，确认 time_sync.server 为
+10.1.1.249，time_sync.synced 为 true，并查看 last_sync_unix_us。
+相机已经启动但尚未同步时，日志会保留 synced=false，不替换成主机时间。
+SNTP 是时钟校正，不能单凭 synced=true 推断曝光时刻误差或端到端控制延迟。
+
+官方参考：https://chrony-project.org/doc/4.2/chrony.conf.html
+
+二、会话固件日志
+
+以下入口自动记录版本（不发送控制命令来获取版本）：
+  1. start_fleet.sh / scripts/fleet_bringup.py：fleet_base_* 日志目录中 firmware_versions.json。
+  2. 网页控制台：log/console_日期_随机后缀/，包含启动快照及每次速度/轨迹 job 的
+     <job_id>_firmware.json；网页返回的 job 中也包含 firmware_log 路径。
+  3. drive 命令：log/drive_日期_随机后缀/ 下的会话快照，list 命令不联网、不建日志。
+  4. vrpn_goal_* / csv_trajectory_*：轨迹 JSONL 旁同名 .firmware.json。
+  5. base_bump_*：目录中的 firmware_versions.json。
+  6. fleet_positions 动捕读取：log/positions_日期_随机后缀/ 下的会话快照。
+
+所有版本查询都在控制循环之外执行，最多同时查询 4 辆车，不阻塞运动心跳或停车。
+底盘按 fleet.json 中的 IP 获取 /api/status；相机地址从该底盘 camera.ip 读取。
+记录内容采用白名单：车号、设备名/MAC/IP、固件版本/构建信息、Wi-Fi 省电状态、
+相机授时状态。不会把完整 /api/status、runtime、settings 或 Wi-Fi 密码写入日志。
+每个新会话重新采集，不使用上次实验的缓存版本。
+
+collection_status=pending：后台尚未完成，进程提前退出可能留下该状态；不能当作完成记录。
+collection_status=complete：采集流程结束，不代表每台设备均在线，需要查看每车状态。
+chassis/camera status=ok：收到固件版本。
+version_unavailable：设备返回状态但未提供版本字段。
+unavailable：超时、旧固件没有接口或返回内容无效。
+not_discovered：没有从底盘获取相机地址。
+identity_mismatch：相机自己报告的名称与底盘报告不一致，需检查 DHCP 或配对。
+identity_unverified：相机或底盘未提供配对名称，观察到的版本不能确认归属于该车相机。
+
+旧版轨迹脚本按 pose_topic 精确匹配 fleet.json；没有匹配时明确记为
+unmapped_pose_topic，不凭车号相似字符串猜测实际设备。应修正启动参数或配置。
+
+也可手动为任意实验创建新日志（输出文件须不存在）：
+
+  python3 scripts/firmware_log.py --cars car11 car12 --output /实验目录/session_firmware.json
+
+省略 --cars 会读取配置中的全部车辆。退出码 0 表示所有所选底盘和相机均报告版本，
+退出码 2 表示至少一台不可达、缺版本或身份不一致；具体情况保留在 JSON 中。
+
+Python源文件使用ROS的symlink安装时可直接生效；新装电脑或非symlink安装应重新构建：
+  ./build.sh --packages-select leap_fleet
+更新后重新启动已在运行的控制台和脚本，旧进程不会自动加载新代码。
+
+离线验证（不会访问小车，不会安装 chrony）：
+  PYTHONPATH=src/leap_fleet python3 -m pytest src/leap_fleet/test/test_firmware_session.py
+  PYTHONPATH=scripts python3 -m unittest scripts/test_camera_chrony.py

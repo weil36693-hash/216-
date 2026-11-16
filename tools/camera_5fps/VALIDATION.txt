@@ -1,0 +1,12 @@
+刷写包验证记录：2026-11-16
+
+1. Linux / Python 3.10 干净虚拟环境从 PyPI 安装 requirements.txt 成功。
+2. 63 项纯离线测试全部通过，使用合成 Flash 和模拟串口命令。
+3. 原11号车备份仅在原机本地只读检查通过；未包含在本包中。
+4. 新应用固件 SHA256 与11号车已刷固件一致，esptool image_info 校验和/SHA256通过。
+5. verify_stream 本地 HTTP chunked + multipart 流测试通过，模拟5FPS测得4.992FPS。
+6. 压缩包按显式文件清单创建，排除虚拟环境、缓存和所有设备备份。
+7. 未在Windows实机执行，未用此便携脚本再次刷写实物。
+
+离线测试命令（不会连接硬件）：
+  python -m unittest discover -s tests -q

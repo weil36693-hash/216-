@@ -1,0 +1,286 @@
+{
+  "sha": "57d086216d01ec43121845d385894a25987f8a2c",
+  "node_id": "C_kwDOBr8ZNtoAKDU3ZDA4NjIxNmQwMWVjNDMxMjE4NDVkMzg1ODk0YTI1OTg3ZjhhMmM",
+  "commit": {
+    "author": {
+      "name": "Pablo Garrido",
+      "email": "pablogs9@gmail.com",
+      "date": "2023-11-22T06:44:50Z"
+    },
+    "committer": {
+      "name": "GitHub",
+      "email": "noreply@github.com",
+      "date": "2023-11-22T06:44:50Z"
+    },
+    "message": "Release v2.4.2",
+    "tree": {
+      "sha": "f63f02ab59e139e795f4c83f5f60957796764ca5",
+      "url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/git/trees/f63f02ab59e139e795f4c83f5f60957796764ca5"
+    },
+    "url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/git/commits/57d086216d01ec43121845d385894a25987f8a2c",
+    "comment_count": 0,
+    "verification": {
+      "verified": true,
+      "reason": "valid",
+      "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsBcBAABCAAQBQJlXaNiCRBK7hj4Ov3rIwAArZUIAEKaRhrFiu/gOmh9jlCsv5ZO\nLCxouICXCLCnJVE45VLknddLdH3rIEciPvHW6Ma/4pOdXfUwKsl0rzh6KfYR6pOE\n1TQtrBzzmiBz/+5ake2mco7wi6kFbwDiMckfF00YM+iHxSLGmpTuDVnCToL1PJsl\nOMj8BGyzcGSWbbQnSaPCn7mFMs2+eIUQUi7GNNYWqORIRWYDDcGWFH0Gzdrh5kef\n+lTQu48Q67/lEVvUTMj5nDc4c3TbXwi4KD3025QcIZGWu3BV3Zq+aQLANzQWAi5Q\ni+QBAi+VBBVgmd0JOV6da1FS32pYuX/XsTzCmRzj0J30TaNEyELAr9cCqUgbuPI=\n=B9Gr\n-----END PGP SIGNATURE-----\n",
+      "payload": "tree f63f02ab59e139e795f4c83f5f60957796764ca5\nparent 40954c2379dfcb2bfa9f6ba22146c57c6742b5b7\nparent 0c5fb0aca17ed502b5e1b642cedfa780fa40b620\nauthor Pablo Garrido <pablogs9@gmail.com> 1700635490 +0100\ncommitter GitHub <noreply@github.com> 1700635490 +0100\n\nRelease v2.4.2\n\n",
+      "verified_at": "2024-01-16T19:59:59Z"
+    }
+  },
+  "url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/commits/57d086216d01ec43121845d385894a25987f8a2c",
+  "html_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/commit/57d086216d01ec43121845d385894a25987f8a2c",
+  "comments_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/commits/57d086216d01ec43121845d385894a25987f8a2c/comments",
+  "author": {
+    "login": "pablogs9",
+    "id": 7647884,
+    "node_id": "MDQ6VXNlcjc2NDc4ODQ=",
+    "avatar_url": "https://avatars.githubusercontent.com/u/7647884?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/pablogs9",
+    "html_url": "https://github.com/pablogs9",
+    "followers_url": "https://api.github.com/users/pablogs9/followers",
+    "following_url": "https://api.github.com/users/pablogs9/following{/other_user}",
+    "gists_url": "https://api.github.com/users/pablogs9/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/pablogs9/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/pablogs9/subscriptions",
+    "organizations_url": "https://api.github.com/users/pablogs9/orgs",
+    "repos_url": "https://api.github.com/users/pablogs9/repos",
+    "events_url": "https://api.github.com/users/pablogs9/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/pablogs9/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "committer": {
+    "login": "web-flow",
+    "id": 19864447,
+    "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+    "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/web-flow",
+    "html_url": "https://github.com/web-flow",
+    "followers_url": "https://api.github.com/users/web-flow/followers",
+    "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+    "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+    "organizations_url": "https://api.github.com/users/web-flow/orgs",
+    "repos_url": "https://api.github.com/users/web-flow/repos",
+    "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/web-flow/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "parents": [
+    {
+      "sha": "40954c2379dfcb2bfa9f6ba22146c57c6742b5b7",
+      "url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/commits/40954c2379dfcb2bfa9f6ba22146c57c6742b5b7",
+      "html_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/commit/40954c2379dfcb2bfa9f6ba22146c57c6742b5b7"
+    },
+    {
+      "sha": "0c5fb0aca17ed502b5e1b642cedfa780fa40b620",
+      "url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/commits/0c5fb0aca17ed502b5e1b642cedfa780fa40b620",
+      "html_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/commit/0c5fb0aca17ed502b5e1b642cedfa780fa40b620"
+    }
+  ],
+  "stats": {
+    "total": 175,
+    "additions": 145,
+    "deletions": 30
+  },
+  "files": [
+    {
+      "sha": "3303cfc5eea9088ec51850d2892d46c819f646dd",
+      "filename": "CMakeLists.txt",
+      "status": "modified",
+      "additions": 7,
+      "deletions": 7,
+      "changes": 14,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/CMakeLists.txt",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/CMakeLists.txt",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/CMakeLists.txt?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -40,8 +40,8 @@ option(UAGENT_SECURITY_PROFILE \"Build security profile.\" OFF)\n option(UAGENT_BUILD_EXECUTABLE \"Build Micro XRCE-DDS Agent provided executable.\" ON)\n option(UAGENT_BUILD_USAGE_EXAMPLES \"Build Micro XRCE-DDS Agent built-in usage examples\" OFF)\n \n-set(UAGENT_P2P_CLIENT_VERSION 2.4.1 CACHE STRING \"Sets Micro XRCE-DDS client version for P2P\")\n-set(UAGENT_P2P_CLIENT_TAG v2.4.1 CACHE STRING \"Sets Micro XRCE-DDS client tag for P2P\")\n+set(UAGENT_P2P_CLIENT_VERSION 2.4.2 CACHE STRING \"Sets Micro XRCE-DDS client version for P2P\")\n+set(UAGENT_P2P_CLIENT_TAG v2.4.2 CACHE STRING \"Sets Micro XRCE-DDS client tag for P2P\")\n \n option(UAGENT_BUILD_CI_TESTS \"Build CI test cases.\")\n if(UAGENT_BUILD_CI_TESTS)\n@@ -80,8 +80,8 @@ set(_deps \"\")\n if(UAGENT_USE_SYSTEM_FASTCDR)\n     set(_fastcdr_version 1)\n else()\n-    set(_fastcdr_version 1.1.0)\n-    set(_fastcdr_tag v1.1.0)\n+    set(_fastcdr_version 1.1.1)\n+    set(_fastcdr_tag v1.1.1)\n endif()\n list(APPEND _deps \"fastcdr\\;${_fastcdr_version}\")\n \n@@ -95,8 +95,8 @@ if(UAGENT_FAST_PROFILE)\n     if(UAGENT_USE_SYSTEM_FASTDDS)\n         set(_fastdds_version 2)\n     else()\n-        set(_fastdds_version 2.11)\n-        set(_fastdds_tag 2.11.x)\n+        set(_fastdds_version 2.12)\n+        set(_fastdds_tag 2.12.x)\n         set(_foonathan_memory_tag v0.7-3) # This tag should be updated every time it gets updated in foonathan_memory_vendor eProsima's package\n     endif()\n     list(APPEND _deps \"fastrtps\\;${_fastdds_version}\")\n@@ -117,7 +117,7 @@ endif()\n ###############################################################################\n set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules)\n if(NOT UAGENT_SUPERBUILD)\n-    project(microxrcedds_agent VERSION \"2.4.1\" LANGUAGES C CXX)\n+    project(microxrcedds_agent VERSION \"2.4.2\" LANGUAGES C CXX)\n else()\n     project(uagent_superbuild NONE)\n     include(${PROJECT_SOURCE_DIR}/cmake/SuperBuild.cmake)"
+    },
+    {
+      "sha": "fbb9c3316a6a3e9b39b07a9126d24ad2397315b3",
+      "filename": "include/uxr/agent/message/InputMessage.hpp",
+      "status": "modified",
+      "additions": 7,
+      "deletions": 0,
+      "changes": 7,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/include%2Fuxr%2Fagent%2Fmessage%2FInputMessage.hpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/include%2Fuxr%2Fagent%2Fmessage%2FInputMessage.hpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/include%2Fuxr%2Fagent%2Fmessage%2FInputMessage.hpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -100,6 +100,13 @@ inline bool InputMessage::prepare_next_submessage()\n     if (fastbuffer_.getBufferSize() > deserializer_.getSerializedDataLength())\n     {\n         rv = deserialize(subheader_);\n+\n+        // Check submessage endianness\n+        fastcdr::Cdr::Endianness endianness = static_cast<fastcdr::Cdr::Endianness>(subheader_.flags() & 0x01);\n+        if (endianness != deserializer_.endianness())\n+        {\n+            deserializer_.changeEndianness(endianness);\n+        }\n     }\n     return rv;\n }"
+    },
+    {
+      "sha": "7d58e476c1758a2fde1e01eb02d494d904dd2e67",
+      "filename": "include/uxr/agent/types/XRCETypes.hpp",
+      "status": "modified",
+      "additions": 78,
+      "deletions": 3,
+      "changes": 81,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/include%2Fuxr%2Fagent%2Ftypes%2FXRCETypes.hpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/include%2Fuxr%2Fagent%2Ftypes%2FXRCETypes.hpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/include%2Fuxr%2Fagent%2Ftypes%2FXRCETypes.hpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -91,6 +91,15 @@ const XrceVersion XRCE_VERSION = {XRCE_VERSION_MAJOR, XRCE_VERSION_MINOR};\n const uint8_t XRCE_VENDOR_INVALID1 = 0x00;\n const uint8_t XRCE_VENDOR_INVALID2 = 0x00;\n \n+//! @brief This enumeration represents the two posible values of the SubMessage endianness flag.\n+typedef enum Endianness\n+{\n+    //! @brief Big endianness.\n+    BIG_ENDIANNESS = 0x0,\n+    //! @brief Little endianness.\n+    LITTLE_ENDIANNESS = 0x1\n+} Endianness;\n+\n /*!\n  * @brief This class represents the structure Time_t defined by the user in the IDL file.\n  * @ingroup TYPESMOD\n@@ -2364,6 +2373,24 @@ class OBJK_RepresentationBinAndXML_Base\n         return m_representation;\n     }\n \n+    /*!\n+     * @brief This function updates the value in representation endianness\n+     * @param endianness New value of representation endianness\n+     */\n+    inline void endianness(Endianness endianness)\n+    {\n+        m_endianness = endianness;\n+    }\n+\n+    /*!\n+     * @brief This function returns a copy to the representation endianness\n+     * @return Representation endianness\n+     */\n+    inline Endianness endianness() const\n+    {\n+        return m_endianness;\n+    }\n+\n     /*!\n      * @brief This function returns the maximum serialized size of an object\n      * depending on the buffer alignment.\n@@ -2395,6 +2422,7 @@ class OBJK_RepresentationBinAndXML_Base\n \n private:\n     OBJK_RepresentationBinAndXMLFormats m_representation;\n+    Endianness m_endianness;\n };\n \n /*!\n@@ -2474,7 +2502,25 @@ class OBJK_Representation3_Base\n     {\n         return m_representation;\n     }\n-    \n+\n+    /*!\n+     * @brief This function updates the value in representation endianness\n+     * @param endianness New value of representation endianness\n+     */\n+    inline void endianness(Endianness endianness)\n+    {\n+        m_endianness = endianness;\n+    }\n+\n+    /*!\n+     * @brief This function returns a copy to the representation endianness\n+     * @return Representation endianness\n+     */\n+    inline Endianness endianness() const\n+    {\n+        return m_endianness;\n+    }\n+\n     /*!\n      * @brief This function returns the maximum serialized size of an object\n      * depending on the buffer alignment.\n@@ -2505,6 +2551,7 @@ class OBJK_Representation3_Base\n \n private:\n     OBJK_Representation3Formats m_representation;\n+    Endianness m_endianness;\n };\n \n /*!\n@@ -5902,7 +5949,34 @@ class ObjectVariant\n      * @exception dds::xrce::XRCETypesException This exception is thrown if the requested union member is not the current selection.\n      */\n     REPLIER_Representation& replier();\n-    \n+\n+    /*!\n+     * @brief This function updates the value in representation endianness\n+     * @param endianness New value of representation endianness\n+     */\n+    inline void endianness(Endianness endianness)\n+    {\n+        m_endianness = endianness;\n+\n+        m_participant.endianness(m_endianness);\n+        m_topic.endianness(m_endianness);\n+        m_publisher.endianness(m_endianness);\n+        m_subscriber.endianness(m_endianness);\n+        m_data_writer.endianness(m_endianness);\n+        m_data_reader.endianness(m_endianness);\n+        m_requester.endianness(m_endianness);\n+        m_replier.endianness(m_endianness);\n+    }\n+\n+    /*!\n+     * @brief This function returns a copy to the representation endianness\n+     * @return Representation endianness\n+     */\n+    inline Endianness endianness() const\n+    {\n+        return m_endianness;\n+    }\n+\n     /*!\n      * @brief This function returns the maximum serialized size of an object\n      * depending on the buffer alignment.\n@@ -5933,7 +6007,8 @@ class ObjectVariant\n \n private:\n     ObjectKind m__d;\n-    \n+    Endianness m_endianness;\n+\n     AGENT_Representation m_agent;\n     CLIENT_Representation m_client;\n     OBJK_APPLICATION_Representation m_application;"
+    },
+    {
+      "sha": "01ff009878341e045744fa2507a828508acd840f",
+      "filename": "include/uxr/agent/utils/ArgumentParser.hpp",
+      "status": "modified",
+      "additions": 2,
+      "deletions": 2,
+      "changes": 4,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/include%2Fuxr%2Fagent%2Futils%2FArgumentParser.hpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/include%2Fuxr%2Fagent%2Futils%2FArgumentParser.hpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/include%2Fuxr%2Fagent%2Futils%2FArgumentParser.hpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -1068,10 +1068,10 @@ class ArgumentParser\n \n         /* Setting baudrate. */\n         speed_t baudrate = getBaudRate(baudrate_str);\n-#if _HAVE_STRUCT_TERMIOS_C_ISPEED\n+#if _HAVE_STRUCT_TERMIOS_C_ISPEED || __APPLE__\n         attr.c_ispeed = baudrate;\n #endif\n-#if _HAVE_STRUCT_TERMIOS_C_OSPEED\n+#if _HAVE_STRUCT_TERMIOS_C_OSPEED || __APPLE__\n         attr.c_ospeed = baudrate;\n #endif\n "
+    },
+    {
+      "sha": "4dfcea17a316635e281cac95ebf002797878186d",
+      "filename": "src/cpp/datareader/DataReader.cpp",
+      "status": "modified",
+      "additions": 4,
+      "deletions": 2,
+      "changes": 6,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Fdatareader%2FDataReader.cpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Fdatareader%2FDataReader.cpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/src%2Fcpp%2Fdatareader%2FDataReader.cpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -54,7 +54,8 @@ std::unique_ptr<DataReader> DataReader::create(\n             dds::xrce::OBJK_DataReader_Binary datareader_xrce;\n \n             fastcdr::FastBuffer fastbuffer{reinterpret_cast<char*>(const_cast<uint8_t*>(rep.binary_representation().data())), rep.binary_representation().size()};\n-            eprosima::fastcdr::Cdr cdr(fastbuffer);\n+            eprosima::fastcdr::Cdr::Endianness endianness = static_cast<eprosima::fastcdr::Cdr::Endianness>(representation.endianness());\n+            eprosima::fastcdr::Cdr cdr(fastbuffer, endianness);\n             datareader_xrce.deserialize(cdr);\n \n             created_entity = proxy_client->get_middleware().create_datareader_by_bin(raw_object_id, subscriber_id, datareader_xrce);\n@@ -111,7 +112,8 @@ bool DataReader::matched(\n             dds::xrce::OBJK_DataReader_Binary datareader_xrce;\n \n             fastcdr::FastBuffer fastbuffer{reinterpret_cast<char*>(const_cast<uint8_t*>(rep.binary_representation().data())), rep.binary_representation().size()};\n-            eprosima::fastcdr::Cdr cdr(fastbuffer);\n+            eprosima::fastcdr::Cdr::Endianness endianness = static_cast<eprosima::fastcdr::Cdr::Endianness>(new_object_rep.endianness());\n+            eprosima::fastcdr::Cdr cdr(fastbuffer, endianness);\n             datareader_xrce.deserialize(cdr);\n \n             rv = proxy_client_->get_middleware().matched_datareader_from_bin(get_raw_id(), datareader_xrce);"
+    },
+    {
+      "sha": "9423deb4094c0f781bc3cb4622546284eb576b81",
+      "filename": "src/cpp/datawriter/DataWriter.cpp",
+      "status": "modified",
+      "additions": 4,
+      "deletions": 2,
+      "changes": 6,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Fdatawriter%2FDataWriter.cpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Fdatawriter%2FDataWriter.cpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/src%2Fcpp%2Fdatawriter%2FDataWriter.cpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -52,7 +52,8 @@ std::unique_ptr<DataWriter> DataWriter::create(\n             dds::xrce::OBJK_DataWriter_Binary datawriter_xrce;\n \n             fastcdr::FastBuffer fastbuffer{reinterpret_cast<char*>(const_cast<uint8_t*>(rep.binary_representation().data())), rep.binary_representation().size()};\n-            eprosima::fastcdr::Cdr cdr(fastbuffer);\n+            eprosima::fastcdr::Cdr::Endianness endianness = static_cast<eprosima::fastcdr::Cdr::Endianness>(representation.endianness());\n+            eprosima::fastcdr::Cdr cdr(fastbuffer, endianness);\n             datawriter_xrce.deserialize(cdr);\n \n             created_entity = proxy_client->get_middleware().create_datawriter_by_bin(raw_object_id, publisher_id, datawriter_xrce);\n@@ -105,7 +106,8 @@ bool DataWriter::matched(const dds::xrce::ObjectVariant& new_object_rep) const\n             dds::xrce::OBJK_DataWriter_Binary datawriter_xrce;\n \n             fastcdr::FastBuffer fastbuffer{reinterpret_cast<char*>(const_cast<uint8_t*>(rep.binary_representation().data())), rep.binary_representation().size()};\n-            eprosima::fastcdr::Cdr cdr(fastbuffer);\n+            eprosima::fastcdr::Cdr::Endianness endianness = static_cast<eprosima::fastcdr::Cdr::Endianness>(new_object_rep.endianness());\n+            eprosima::fastcdr::Cdr cdr(fastbuffer, endianness);\n             datawriter_xrce.deserialize(cdr);\n \n             rv = proxy_client_->get_middleware().matched_datawriter_from_bin(get_raw_id(), datawriter_xrce);"
+    },
+    {
+      "sha": "a383fb9412af0723e41ffe56d257b891b4833a37",
+      "filename": "src/cpp/middleware/fastdds/FastDDSMiddleware.cpp",
+      "status": "modified",
+      "additions": 16,
+      "deletions": 0,
+      "changes": 16,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Fmiddleware%2Ffastdds%2FFastDDSMiddleware.cpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Fmiddleware%2Ffastdds%2FFastDDSMiddleware.cpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/src%2Fcpp%2Fmiddleware%2Ffastdds%2FFastDDSMiddleware.cpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -70,6 +70,14 @@ bool FastDDSMiddleware::create_participant_by_ref(\n         int16_t domain_id,\n         const std::string& ref)\n {\n+    if(domain_id == UXR_CLIENT_DOMAIN_ID_TO_OVERRIDE_WITH_ENV){\n+        domain_id = agent_domain_id_;\n+        UXR_AGENT_LOG_WARN(\n+                UXR_DECORATE_YELLOW(\"Overriding Micro XRCE-DDS Client DOMAIN_ID\"),\n+                \"domain_id: {}\", domain_id\n+        );\n+    }\n+\n     bool rv = false;\n     fastrtps::ParticipantAttributes attrs;\n     auto participant_domain_id = domain_id;\n@@ -97,6 +105,14 @@ bool FastDDSMiddleware::create_participant_by_xml(\n         int16_t domain_id,\n         const std::string& xml)\n {\n+    if(domain_id == UXR_CLIENT_DOMAIN_ID_TO_OVERRIDE_WITH_ENV){\n+        domain_id = agent_domain_id_;\n+        UXR_AGENT_LOG_WARN(\n+                UXR_DECORATE_YELLOW(\"Overriding Micro XRCE-DDS Client DOMAIN_ID\"),\n+                \"domain_id: {}\", domain_id\n+        );\n+    }\n+\n     bool rv = false;\n     std::shared_ptr<FastDDSParticipant> participant(new FastDDSParticipant(domain_id));\n     if (participant->create_by_xml(xml))"
+    },
+    {
+      "sha": "45d6c63fb8473572e9d15ad4a41f74594b47f82e",
+      "filename": "src/cpp/participant/Participant.cpp",
+      "status": "modified",
+      "additions": 4,
+      "deletions": 2,
+      "changes": 6,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Fparticipant%2FParticipant.cpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Fparticipant%2FParticipant.cpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/src%2Fcpp%2Fparticipant%2FParticipant.cpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -48,7 +48,8 @@ std::unique_ptr<Participant> Participant::create(\n             participant_xrce.domain_id(representation.domain_id());\n \n             fastcdr::FastBuffer fastbuffer{reinterpret_cast<char*>(const_cast<uint8_t*>(rep.binary_representation().data())), rep.binary_representation().size()};\n-            eprosima::fastcdr::Cdr cdr(fastbuffer);\n+            eprosima::fastcdr::Cdr::Endianness endianness = static_cast<eprosima::fastcdr::Cdr::Endianness>(representation.endianness());\n+            eprosima::fastcdr::Cdr cdr(fastbuffer, endianness);\n             participant_xrce.deserialize(cdr);\n \n             created_entity = proxy_client->get_middleware().create_participant_by_bin(raw_object_id, participant_xrce);\n@@ -106,7 +107,8 @@ bool Participant::matched(const dds::xrce::ObjectVariant& new_object_rep) const\n             participant_xrce.domain_id(domain_id);\n \n             fastcdr::FastBuffer fastbuffer{reinterpret_cast<char*>(const_cast<uint8_t*>(rep.binary_representation().data())), rep.binary_representation().size()};\n-            eprosima::fastcdr::Cdr cdr(fastbuffer);\n+            eprosima::fastcdr::Cdr::Endianness endianness = static_cast<eprosima::fastcdr::Cdr::Endianness>(new_object_rep.endianness());\n+            eprosima::fastcdr::Cdr cdr(fastbuffer, endianness);\n             participant_xrce.deserialize(cdr);\n \n             rv = proxy_client_->get_middleware().matched_participant_from_bin(get_raw_id(), domain_id, participant_xrce);"
+    },
+    {
+      "sha": "8133d7f7748860556141acfd6b2a030ff6bd5c15",
+      "filename": "src/cpp/processor/Processor.cpp",
+      "status": "modified",
+      "additions": 3,
+      "deletions": 0,
+      "changes": 3,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Fprocessor%2FProcessor.cpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Fprocessor%2FProcessor.cpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/src%2Fcpp%2Fprocessor%2FProcessor.cpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -332,6 +332,9 @@ bool Processor<EndPoint>::process_create_submessage(\n     dds::xrce::CREATE_Payload create_payload;\n     if (input_packet.message->get_payload(create_payload))\n     {\n+        dds::xrce::Endianness endianness = static_cast<dds::xrce::Endianness>(input_packet.message->get_subheader().flags() & 0x01);\n+        create_payload.object_representation().endianness(endianness);\n+\n         dds::xrce::STATUS_Payload status_payload;\n         status_payload.related_request().request_id(create_payload.request_id());\n         status_payload.related_request().object_id(create_payload.object_id());"
+    },
+    {
+      "sha": "078b33824c2c896e138ef3027e38ae5c5311f440",
+      "filename": "src/cpp/publisher/Publisher.cpp",
+      "status": "modified",
+      "additions": 2,
+      "deletions": 1,
+      "changes": 3,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Fpublisher%2FPublisher.cpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Fpublisher%2FPublisher.cpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/src%2Fcpp%2Fpublisher%2FPublisher.cpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -42,7 +42,8 @@ std::unique_ptr<Publisher> Publisher::create(\n             dds::xrce::OBJK_Publisher_Binary publisher_xrce;\n \n             fastcdr::FastBuffer fastbuffer{reinterpret_cast<char*>(const_cast<uint8_t*>(rep.binary_representation().data())), rep.binary_representation().size()};\n-            eprosima::fastcdr::Cdr cdr(fastbuffer);\n+            eprosima::fastcdr::Cdr::Endianness endianness = static_cast<eprosima::fastcdr::Cdr::Endianness>(representation.endianness());\n+            eprosima::fastcdr::Cdr cdr(fastbuffer, endianness);\n             publisher_xrce.deserialize(cdr);\n \n             created_entity = proxy_client->get_middleware().create_publisher_by_bin(raw_object_id, participant_id, publisher_xrce);"
+    },
+    {
+      "sha": "e1bbb642dac195cce05287ebe97e1a1acdbe0f85",
+      "filename": "src/cpp/replier/Replier.cpp",
+      "status": "modified",
+      "additions": 4,
+      "deletions": 2,
+      "changes": 6,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Freplier%2FReplier.cpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Freplier%2FReplier.cpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/src%2Fcpp%2Freplier%2FReplier.cpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -52,7 +52,8 @@ std::unique_ptr<Replier> Replier::create(\n             dds::xrce::OBJK_Replier_Binary replier_xrce;\n \n             fastcdr::FastBuffer fastbuffer{reinterpret_cast<char*>(const_cast<uint8_t*>(rep.binary_representation().data())), rep.binary_representation().size()};\n-            eprosima::fastcdr::Cdr cdr(fastbuffer);\n+            eprosima::fastcdr::Cdr::Endianness endianness = static_cast<eprosima::fastcdr::Cdr::Endianness>(representation.endianness());\n+            eprosima::fastcdr::Cdr cdr(fastbuffer, endianness);\n             replier_xrce.deserialize(cdr);\n \n             created_entity = proxy_client->get_middleware().create_replier_by_bin(raw_object_id, participant_id, replier_xrce);\n@@ -108,7 +109,8 @@ bool Replier::matched(\n             dds::xrce::OBJK_Replier_Binary replier_xrce;\n \n             fastcdr::FastBuffer fastbuffer{reinterpret_cast<char*>(const_cast<uint8_t*>(rep.binary_representation().data())), rep.binary_representation().size()};\n-            eprosima::fastcdr::Cdr cdr(fastbuffer);\n+            eprosima::fastcdr::Cdr::Endianness endianness = static_cast<eprosima::fastcdr::Cdr::Endianness>(new_object_rep.endianness());\n+            eprosima::fastcdr::Cdr cdr(fastbuffer, endianness);\n             replier_xrce.deserialize(cdr);\n \n             rv = proxy_client_->get_middleware().matched_replier_from_bin(get_raw_id(), replier_xrce);"
+    },
+    {
+      "sha": "e1dddb754dd69353d269ebe5edfe14b0705508ce",
+      "filename": "src/cpp/requester/Requester.cpp",
+      "status": "modified",
+      "additions": 4,
+      "deletions": 2,
+      "changes": 6,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Frequester%2FRequester.cpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Frequester%2FRequester.cpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/src%2Fcpp%2Frequester%2FRequester.cpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -54,7 +54,8 @@ std::unique_ptr<Requester> Requester::create(\n             dds::xrce::OBJK_Requester_Binary request_xrce;\n \n             fastcdr::FastBuffer fastbuffer{reinterpret_cast<char*>(const_cast<uint8_t*>(rep.binary_representation().data())), rep.binary_representation().size()};\n-            eprosima::fastcdr::Cdr cdr(fastbuffer);\n+            eprosima::fastcdr::Cdr::Endianness endianness = static_cast<eprosima::fastcdr::Cdr::Endianness>(representation.endianness());\n+            eprosima::fastcdr::Cdr cdr(fastbuffer, endianness);\n             request_xrce.deserialize(cdr);\n \n             created_entity = proxy_client->get_middleware().create_requester_by_bin(raw_object_id, participant_id, request_xrce);\n@@ -110,7 +111,8 @@ bool Requester::matched(\n             dds::xrce::OBJK_Requester_Binary request_xrce;\n \n             fastcdr::FastBuffer fastbuffer{reinterpret_cast<char*>(const_cast<uint8_t*>(rep.binary_representation().data())), rep.binary_representation().size()};\n-            eprosima::fastcdr::Cdr cdr(fastbuffer);\n+            eprosima::fastcdr::Cdr::Endianness endianness = static_cast<eprosima::fastcdr::Cdr::Endianness>(new_object_rep.endianness());\n+            eprosima::fastcdr::Cdr cdr(fastbuffer, endianness);\n             request_xrce.deserialize(cdr);\n \n             rv = proxy_client_->get_middleware().matched_requester_from_bin(get_raw_id(), request_xrce);"
+    },
+    {
+      "sha": "409c0ad0da4bc100a105812da90c2dbf6d183352",
+      "filename": "src/cpp/subscriber/Subscriber.cpp",
+      "status": "modified",
+      "additions": 2,
+      "deletions": 1,
+      "changes": 3,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Fsubscriber%2FSubscriber.cpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Fsubscriber%2FSubscriber.cpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/src%2Fcpp%2Fsubscriber%2FSubscriber.cpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -42,7 +42,8 @@ std::unique_ptr<Subscriber> Subscriber::create(\n             dds::xrce::OBJK_Subscriber_Binary subscriber_xrce;\n \n             fastcdr::FastBuffer fastbuffer{reinterpret_cast<char*>(const_cast<uint8_t*>(rep.binary_representation().data())), rep.binary_representation().size()};\n-            eprosima::fastcdr::Cdr cdr(fastbuffer);\n+            eprosima::fastcdr::Cdr::Endianness endianness = static_cast<eprosima::fastcdr::Cdr::Endianness>(representation.endianness());\n+            eprosima::fastcdr::Cdr cdr(fastbuffer, endianness);\n             subscriber_xrce.deserialize(cdr);\n \n             created_entity = proxy_client->get_middleware().create_subscriber_by_bin(raw_object_id, participant_id, subscriber_xrce);"
+    },
+    {
+      "sha": "8a77183b7b453b7f672f931ece29a3d8de279e33",
+      "filename": "src/cpp/topic/Topic.cpp",
+      "status": "modified",
+      "additions": 4,
+      "deletions": 2,
+      "changes": 6,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Ftopic%2FTopic.cpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Ftopic%2FTopic.cpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/src%2Fcpp%2Ftopic%2FTopic.cpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -49,7 +49,8 @@ std::unique_ptr<Topic> Topic::create(\n             dds::xrce::OBJK_Topic_Binary topic_xrce;\n \n             fastcdr::FastBuffer fastbuffer{reinterpret_cast<char*>(const_cast<uint8_t*>(rep.binary_representation().data())), rep.binary_representation().size()};\n-            eprosima::fastcdr::Cdr cdr(fastbuffer);\n+            eprosima::fastcdr::Cdr::Endianness endianness = static_cast<eprosima::fastcdr::Cdr::Endianness>(representation.endianness());\n+            eprosima::fastcdr::Cdr cdr(fastbuffer, endianness);\n             topic_xrce.deserialize(cdr);\n \n             created_entity = proxy_client->get_middleware().create_topic_by_bin(raw_object_id, participant_id, topic_xrce);\n@@ -103,7 +104,8 @@ bool Topic::matched(const dds::xrce::ObjectVariant& new_object_rep) const\n             dds::xrce::OBJK_Topic_Binary topic_xrce;\n \n             fastcdr::FastBuffer fastbuffer{reinterpret_cast<char*>(const_cast<uint8_t*>(rep.binary_representation().data())), rep.binary_representation().size()};\n-            eprosima::fastcdr::Cdr cdr(fastbuffer);\n+            eprosima::fastcdr::Cdr::Endianness endianness = static_cast<eprosima::fastcdr::Cdr::Endianness>(new_object_rep.endianness());\n+            eprosima::fastcdr::Cdr cdr(fastbuffer, endianness);\n             topic_xrce.deserialize(cdr);\n \n             rv = proxy_client_->get_middleware().matched_topic_from_bin(get_raw_id(), topic_xrce);"
+    },
+    {
+      "sha": "70bd1f2f042efe54f4ede6141b5fb0af65b0ff1f",
+      "filename": "src/cpp/transport/serial/MultiTermiosAgentLinux.cpp",
+      "status": "modified",
+      "additions": 2,
+      "deletions": 2,
+      "changes": 4,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Ftransport%2Fserial%2FMultiTermiosAgentLinux.cpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Ftransport%2Fserial%2FMultiTermiosAgentLinux.cpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/src%2Fcpp%2Ftransport%2Fserial%2FMultiTermiosAgentLinux.cpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -85,10 +85,10 @@ void MultiTermiosAgent::init_multiport()\n                         new_attrs.c_cc[VMIN] = termios_attrs_.c_cc[VMIN];\n                         new_attrs.c_cc[VTIME] = termios_attrs_.c_cc[VTIME];\n \n-#if _HAVE_STRUCT_TERMIOS_C_ISPEED\n+#if _HAVE_STRUCT_TERMIOS_C_ISPEED || __APPLE__\n                         cfsetispeed(&new_attrs, termios_attrs_.c_ispeed);\n #endif\n-#if _HAVE_STRUCT_TERMIOS_C_OSPEED\n+#if _HAVE_STRUCT_TERMIOS_C_OSPEED || __APPLE__\n                         cfsetospeed(&new_attrs, termios_attrs_.c_ospeed);\n #endif\n "
+    },
+    {
+      "sha": "fab89a5a6e2dd7404bf7b88e9c98e595275941a4",
+      "filename": "src/cpp/transport/serial/TermiosAgentLinux.cpp",
+      "status": "modified",
+      "additions": 2,
+      "deletions": 2,
+      "changes": 4,
+      "blob_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/blob/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Ftransport%2Fserial%2FTermiosAgentLinux.cpp",
+      "raw_url": "https://github.com/eProsima/Micro-XRCE-DDS-Agent/raw/57d086216d01ec43121845d385894a25987f8a2c/src%2Fcpp%2Ftransport%2Fserial%2FTermiosAgentLinux.cpp",
+      "contents_url": "https://api.github.com/repos/eProsima/Micro-XRCE-DDS-Agent/contents/src%2Fcpp%2Ftransport%2Fserial%2FTermiosAgentLinux.cpp?ref=57d086216d01ec43121845d385894a25987f8a2c",
+      "patch": "@@ -102,10 +102,10 @@ bool TermiosAgent::init()\n             new_attrs.c_cc[VMIN] = termios_attrs_.c_cc[VMIN];\n             new_attrs.c_cc[VTIME] = termios_attrs_.c_cc[VTIME];\n \n-#if _HAVE_STRUCT_TERMIOS_C_ISPEED\n+#if _HAVE_STRUCT_TERMIOS_C_ISPEED || __APPLE__\n             cfsetispeed(&new_attrs, termios_attrs_.c_ispeed);\n #endif\n-#if _HAVE_STRUCT_TERMIOS_C_OSPEED\n+#if _HAVE_STRUCT_TERMIOS_C_OSPEED || __APPLE__\n             cfsetospeed(&new_attrs, termios_attrs_.c_ospeed);\n #endif\n "
+    }
+  ]
+}

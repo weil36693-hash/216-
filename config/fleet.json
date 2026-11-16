@@ -1,0 +1,181 @@
+{
+  "mocap_domain_id": 0,
+  "cars": [
+    {
+      "name": "car01",
+      "ip": "10.1.1.202",
+      "pose_topic": "/vrpn_mocap/car_01/pose",
+      "agent_port": 20001,
+      "domain_id": 1
+    },
+    {
+      "name": "car02",
+      "ip": "10.1.1.235",
+      "pose_topic": "/vrpn_mocap/car_02/pose",
+      "agent_port": 20002,
+      "domain_id": 2
+    },
+    {
+      "name": "car03",
+      "ip": "10.1.1.213",
+      "pose_topic": "/vrpn_mocap/car_03/pose",
+      "agent_port": 20003,
+      "domain_id": 3
+    },
+    {
+      "name": "car04",
+      "ip": "10.1.1.214",
+      "pose_topic": "/vrpn_mocap/car_04/pose",
+      "mocap_binding_confirmed": true,
+      "agent_port": 20004,
+      "domain_id": 4
+    },
+    {
+      "name": "car05",
+      "ip": "10.1.1.247",
+      "pose_topic": "/vrpn_mocap/car_05/pose",
+      "agent_port": 20005,
+      "domain_id": 5
+    },
+    {
+      "name": "car06",
+      "ip": "10.1.1.250",
+      "pose_topic": "/vrpn_mocap/car_06/pose",
+      "agent_port": 20006,
+      "domain_id": 6
+    },
+    {
+      "name": "car07",
+      "ip": "10.1.1.217",
+      "pose_topic": "/vrpn_mocap/car_07/pose",
+      "agent_port": 20007,
+      "domain_id": 7
+    },
+    {
+      "name": "car08",
+      "ip": "10.1.1.220",
+      "pose_topic": "/vrpn_mocap/car_08/pose",
+      "agent_port": 20008,
+      "domain_id": 8
+    },
+    {
+      "name": "car09",
+      "ip": "10.1.1.229",
+      "pose_topic": "/vrpn_mocap/car_09/pose",
+      "agent_port": 20009,
+      "domain_id": 9
+    },
+    {
+      "name": "car10",
+      "ip": "10.1.1.232",
+      "pose_topic": "/vrpn_mocap/car_10/pose",
+      "agent_port": 20010,
+      "domain_id": 10
+    },
+    {
+      "name": "car11",
+      "ip": "10.1.1.236",
+      "pose_topic": "/vrpn_mocap/car_11/pose",
+      "agent_port": 20011,
+      "domain_id": 11
+    },
+    {
+      "name": "car12",
+      "ip": "10.1.1.238",
+      "pose_topic": "/vrpn_mocap/car_12/pose",
+      "agent_port": 20012,
+      "domain_id": 12
+    },
+    {
+      "name": "car13",
+      "ip": "10.1.1.240",
+      "pose_topic": "/vrpn_mocap/car_13/pose",
+      "agent_port": 20013,
+      "domain_id": 13
+    },
+    {
+      "name": "car14",
+      "ip": "10.1.1.252",
+      "pose_topic": "/vrpn_mocap/car_14/pose",
+      "agent_port": 20014,
+      "domain_id": 14
+    },
+    {
+      "name": "car15",
+      "ip": "10.1.1.248",
+      "pose_topic": "/vrpn_mocap/car_15/pose",
+      "agent_port": 20015,
+      "domain_id": 15
+    },
+    {
+      "name": "car16",
+      "ip": "10.1.1.234",
+      "pose_topic": "/vrpn_mocap/car_16/pose",
+      "agent_port": 20016,
+      "domain_id": 16
+    },
+    {
+      "name": "car17",
+      "ip": "10.1.1.231",
+      "pose_topic": "/vrpn_mocap/car_17/pose",
+      "agent_port": 20017,
+      "domain_id": 17
+    },
+    {
+      "name": "car18",
+      "ip": "10.1.1.239",
+      "pose_topic": "/vrpn_mocap/car_18/pose",
+      "agent_port": 20018,
+      "domain_id": 18
+    },
+    {
+      "name": "car19",
+      "ip": "10.1.1.215",
+      "pose_topic": "/vrpn_mocap/car_19/pose",
+      "agent_port": 20019,
+      "domain_id": 19
+    },
+    {
+      "name": "car20",
+      "ip": "10.1.1.227",
+      "pose_topic": "/vrpn_mocap/car_20/pose",
+      "agent_port": 20020,
+      "domain_id": 20
+    },
+    {
+      "name": "car21",
+      "ip": "10.1.1.237",
+      "pose_topic": "/vrpn_mocap/car_21/pose",
+      "agent_port": 20021,
+      "domain_id": 21
+    },
+    {
+      "name": "car22",
+      "ip": "10.1.1.219",
+      "pose_topic": "/vrpn_mocap/car_22/pose",
+      "agent_port": 20022,
+      "domain_id": 22
+    },
+    {
+      "name": "car23",
+      "ip": "10.1.1.246",
+      "pose_topic": "/vrpn_mocap/car_23/pose",
+      "agent_port": 20023,
+      "domain_id": 23
+    },
+    {
+      "name": "car24",
+      "ip": "10.1.1.251",
+      "pose_topic": "/vrpn_mocap/car_24/pose",
+      "agent_port": 20024,
+      "domain_id": 24
+    },
+    {
+      "name": "car25",
+      "ip": "10.1.1.253",
+      "pose_topic": "/vrpn_mocap/car_25/pose",
+      "agent_port": 20025,
+      "domain_id": 25
+    }
+  ]
+}

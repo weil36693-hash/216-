@@ -1,0 +1,125 @@
+25 台小车：动捕位置读取与独立底盘启动（ROS 2 Humble）
+
+工作目录：~/leap-ros
+配置：config/fleet.json（已录入截图中的 25 个 IP）
+动捕刚体名称按最新验证可用的命令设为 car_01～car_25。
+对应话题 /vrpn_mocap/car_01/pose ～ /vrpn_mocap/car_25/pose。
+截图 car01 对应刚体 car_01、car02 对应 car_02，以此类推；须在现场确认绑定正确。
+
+一、第一个脚本：看全部 25 台车的位置
+
+如果尚未启动动捕客户端，在一个终端运行：
+
+cd ~/leap-ros
+./read_fleet_positions.sh --start-vrpn
+
+该命令启动连接 10.1.1.198:3883 的 VRPN 客户端，并显示全部 25 车坐标。
+脚本自动加载 /opt/ros/humble/setup.bash 和 ~/vrpn_ws/install/setup.bash，
+设置 ROS_DOMAIN_ID=0、ROS_LOCALHOST_ONLY=0，使用 best_effort 订阅 25 个位姿话题。
+每秒刷新一次表格，每车一行，显示 XYZ（米）；无需打开 25 个终端。
+只看动捕位置不需要运行底盘脚本，也不需要修改小车的 8888 端口。
+已有动捕客户端运行时，使用下面的命令只启动位置显示：
+
+./read_fleet_positions.sh
+
+可选：记录收到的全部有效位姿（文件会覆盖，使用新的文件名）：
+
+./read_fleet_positions.sh --csv /tmp/fleet_positions.csv
+
+输出为世界坐标 XYZ（单位米）、frame 和数据状态。
+WAIT=尚未收到；OK=最近 1 秒收到有效数据；STALE=超时，显示的是旧坐标。
+接收正常不等于动捕软件有效跟踪，须确认软件实时采集、标记点可见，
+逐车轻推确认对应坐标变化。不同 frame 的坐标不可直接比较。
+脚本固定使用动捕域 0，需要其他域时：MOCAP_DOMAIN_ID=域号 ./read_fleet_positions.sh
+动捕服务器可通过 --server 地址 --port 端口 覆盖。
+Ctrl+C 结束显示，并结束本次 --start-vrpn 启动的客户端。
+
+二、第二个脚本：建立通信后启动 25 套底盘
+
+给 25 辆车上电，连接到与电脑互通的局域网，保持车辆静止。
+首次使用，在另一个终端运行：
+
+cd ~/leap-ros
+./start_fleet.sh --configure
+
+--configure 会先读取全部车辆配置，并保存原通信参数；
+随后仅修改与目标不符的车辆通信设置，并通过车辆已有接口保存和重启。
+电脑 IP 由逐车路由自动选择；如有多网卡/VPN，可显式指定局域网 IP：
+
+./start_fleet.sh --configure --agent-ip 10.1.1.249
+
+上例地址须替换为电脑当前局域网 IP，可用 ip -4 route get 10.1.1.202 查看 src。
+不使用 --configure 时只读取并核对车辆通信设置，不修改/重启车辆：
+
+./start_fleet.sh
+
+脚本执行流程：
+1. 检查配置、所需 ROS 包、专用 Agent、端口及重复启动锁。
+2. 并行读取全部车辆 /api/status；任一读取失败时，尚未修改车辆就退出。
+3. 启动每车独立 Agent；有 --configure 时保存需要更新的通信设置并重启车辆。
+4. 在每车独立域等待 /odom 和 /imu 连续数据，检查 /cmd_vel 的订阅者唯一。
+5. 在每车独立域运行原有 chuyun_bringup.launch.py：机器人模型、关节状态、
+   ekf_input_adapter 和 robot_localization EKF，与单车说明中的底盘启动一致。
+6. 检查每个域的 /odometry/filtered 有连续数据；全部通过才报告底盘就绪。
+
+默认每阶段等待 60 秒，可用 --timeout 90 延长。
+任一进程退出或数据检查失败，会结束本次启动的进程并报告对应车辆日志。
+运行期间保持终端打开。Ctrl+C 结束本次 Agent 和底盘节点，车辆配置保留。
+脚本不发送速度或轨迹指令。退出通信程序不能代替运动控制器的停车指令。
+若某辆车离线，可先只启动在线车辆：
+
+./start_fleet.sh --configure --cars car01 car23
+
+只预览全部 25 车的计划，不联网、不启动进程、不修改配置：
+
+./start_fleet.sh --dry-run
+
+三、每辆车如何区分
+
+现有固件使用相同 /odom、/imu、/cmd_vel 和 TF 名称。
+因此使用每车独立 Agent UDP 端口和独立 ROS_DOMAIN_ID，复用单车底盘 launch。
+car01：端口 20001，ROS_DOMAIN_ID=1；car02：20002，域 2；以此类推；
+car25：20025，域 25。端口选择避开这些 ROS 域的 DDS 端口。
+动捕客户端和第一个脚本仍在域 0，与底盘启动独立运行。
+
+本地 Agent 增加 LEAP_AGENT_DOMAIN_ID，覆盖 MCU 固定请求的 DDS 域。
+这不是普通 Agent 的环境变量功能；必须使用本项目已编译的 Agent 和 vendor 库。
+普通 Docker microros/micro-ros-agent:humble 不包含此修改。
+不启用 LEAP_AGENT_DOMAIN_ID 时本地 Agent 保留原单车行为。
+重新部署或重编译该扩展：
+
+./build.sh --packages-select micro_ros_agent
+
+查看 car23 的融合位置示例（这是底盘自身里程计坐标，不是动捕世界坐标）：
+
+source /opt/ros/humble/setup.bash
+source ~/leap-ros/install/setup.bash
+ROS_DOMAIN_ID=23 ros2 topic echo /odometry/filtered --once --qos-reliability best_effort
+
+各车底盘话题与 TF 只在各自的域中可见。
+旧轨迹脚本依赖动捕与底盘同域，不能直接套用到此多域方案；后续轨迹控制
+需要为目标车辆桥接动捕反馈，或使用显式跨域订阅的控制器。
+
+四、日志与失败恢复
+
+日志：log/fleet_base_日期时间_随机字符/
+每车分别保存 *_agent.log、*_raw.log、*_base.log、*_filtered.log。
+network_before.json 保存本次运行前的通信参数；network_target.json 为目标参数；
+network_applied.jsonl 记录获得成功 HTTP 响应的修改。
+若修改到一半失败，已修改的车辆保留新配置；重新运行 --configure 会继续配置
+仍不匹配的车辆，不自动把所有车辆反复改回旧配置。HTTP 返回前若车辆断开，
+可能已经保存成功，请查看车辆状态或重新运行确认。
+
+恢复旧单车方式时，在对应车辆网页将 Agent IP/Port 按 network_before.json
+恢复（旧说明一般为电脑 IP:8888），再运行原单车 Agent 与底盘命令。
+电脑防火墙如已启用，应允许这些车辆访问 UDP 20001～20025；脚本不会修改防火墙。
+车辆设置正确但未重连时，可复位对应车辆，然后重新运行启动脚本。
+不要把“Agent 进程正在监听”当成连接成功，启动脚本以收到实际 ROS 数据为准。
+
+验证：已完成语法、25 车配置和模拟动捕读取测试，并验证 Agent 二进制/XML
+参与者的域覆盖与未启用时的原行为。另已验证两个独立 ROS 域中的底盘模型、
+适配器、EKF 和就绪检查，融合坐标分别保持各自的模拟值。
+尚未完成真实 25 车同时连接验证。
+
+
+

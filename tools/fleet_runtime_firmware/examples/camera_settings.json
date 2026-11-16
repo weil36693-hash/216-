@@ -1,0 +1,12 @@
+{
+  "fps": 5,
+  "resolution": "640x480",
+  "jpeg_quality": 12,
+  "auto_exposure": false,
+  "exposure": 300,
+  "exposure_level": 0,
+  "auto_white_balance": false,
+  "white_balance_mode": 1,
+  "auto_gain": false,
+  "gain": 0
+}
